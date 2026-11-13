@@ -4,6 +4,8 @@
 
 目前景點／美食採用 **免金鑰 Google Maps 外部搜尋＋回 App 手動收藏**，不需要 Google Cloud、帳單或 Places 設定。請見 [免金鑰操作說明](docs/NO-KEY-MAPS.md)。
 
+手機與電腦公開預覽：[旅伴手帳](https://kellyyang991212-droid.github.io/Kelly/)。發布流程與功能範圍見 [GitHub Pages 說明](docs/GITHUB-PAGES.md)。
+
 ## 啟動
 
 建議 Node.js 22 LTS 或以上，使用 pnpm。本專案鎖定 Expo SDK 54、React 19.1、React Native 0.81.5，確保套件互相相容。

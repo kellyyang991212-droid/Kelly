@@ -9,3 +9,4 @@ web-build/
 !.env.places.example
 test-results/
 .github-upload/
+deployment-tools/
