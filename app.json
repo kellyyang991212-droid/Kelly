@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "旅伴手帳",
+    "slug": "travel-companion-journal",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "traveljournal",
+    "ios": { "supportsTablet": true, "bundleIdentifier": "com.traveljournal.prototype" },
+    "android": { "package": "com.traveljournal.prototype", "edgeToEdgeEnabled": true },
+    "web": { "bundler": "metro", "name": "旅伴手帳・一起，把旅行寫成回憶" }
+  }
+}

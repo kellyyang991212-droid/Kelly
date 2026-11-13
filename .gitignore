@@ -1,0 +1,10 @@
+node_modules/
+.expo/
+dist/
+dist-native/
+web-build/
+.env
+.env.*
+!.env.example
+!.env.places.example
+test-results/
