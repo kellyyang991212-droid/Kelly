@@ -2,7 +2,7 @@
 
 供自己與親友旅行使用的繁體中文 React Native＋Expo 可操作原型。一趟旅行＝一個共同空間。
 
-新增行程可在 App 內搜尋常見景點並點選帶入。也可用 OpenStreetMap 的 Photon 服務搜尋更多地點，或開啟 Google Maps 後手動填寫。美食採用 Google Maps 外部搜尋與手動收藏。這些流程無需 Google Cloud、帳單或 Places 設定。請見 [免金鑰操作說明](docs/NO-KEY-MAPS.md)。
+新增行程和美食收藏都可在 App 內搜尋並點選帶入。內建清單提供部分城市的常見景點與店家，也可用 OpenStreetMap 的 Photon 服務搜尋更多地點，或開啟 Google Maps 後手動填寫。這些流程無需 Google Cloud、帳單或 Places 設定。請見 [免金鑰操作說明](docs/NO-KEY-MAPS.md)。
 
 手機與電腦公開預覽：[旅伴手帳](https://kellyyang991212-droid.github.io/Kelly/)。發布流程與功能範圍見 [GitHub Pages 說明](docs/GITHUB-PAGES.md)。
 
@@ -29,7 +29,7 @@ pnpm ios
 
 - 旅行列表、關鍵字搜尋、示範／自建旅行篩選，建立 1～31 天的新旅行並進入獨立空間。
 - 行程：依日期切換、新增時間與備註、依時間排序、標記完成。輸入關鍵字後可選取景點帶入名稱與地址或地區，也可手動填寫及貼上分享連結。儲存後可查看地圖與規劃路線。
-- 美食：外開 Google Maps 查目的地或目前附近餐飲，回 App 保存店家名稱、地址與分享連結；收藏／取消收藏、篩選、去重與加入行程。定位由 Google Maps 處理，本 App 不請求定位權限。
+- 美食：在表單搜尋並選取店家，帶入店名和地址或地區；收藏／取消收藏、篩選、去重與加入行程。也可開啟 Google Maps 查看附近美食。
 - 記帳：新增整數日圓支出、選付款人與分攤成員、即時計算分攤預覽、查看單筆分攤與全旅程結算建議。
 - 相簿：查看 6 張示意照片、放大、上一張／下一張。
 - 聊天：新增本機文字訊息。語音只提供未連線介面與模擬靜音；分享只提供範圍預覽。
@@ -48,7 +48,7 @@ pnpm ios
 
 ## 原型界線
 
-新增行程的內建清單涵蓋部分城市的常見景點。按「線上搜尋景點」才會將關鍵字及所選目的地送到 Photon。評價與營業時間可到 Google Maps 查看。若 App 被系統終止，未儲存表單仍可能遺失。
+按「線上搜尋景點」或「線上搜尋店家」才會將關鍵字及所選目的地送到 Photon。評價與營業時間可到 Google Maps 查看。若 App 被系統終止，未儲存表單仍可能遺失。
 
 技術依據：[Google Maps URLs 官方文件](https://developers.google.com/maps/documentation/urls/get-started)。
 
