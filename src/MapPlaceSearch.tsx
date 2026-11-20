@@ -16,7 +16,7 @@ export default function MapPlaceSearch({ destination, onSelect, onInvalidLink, k
   const [error, setError] = useState('');
   const [linkError, setLinkError] = useState('');
   const [opened, setOpened] = useState(false);
-  const [picked, setPicked] = useState<ItineraryPlace | null>(null);
+  const [picked, setPicked] = useState<Pick<ItineraryPlace, 'name' | 'address'> | null>(null);
   const [onlineResults, setOnlineResults] = useState<ItineraryPlace[] | null>(null);
   const [lookingUp, setLookingUp] = useState(false);
   const [lookupError, setLookupError] = useState('');
@@ -28,6 +28,8 @@ export default function MapPlaceSearch({ destination, onSelect, onInvalidLink, k
   const term = query.trim();
   const suggestions = picked ? [] : findItineraryPlaces(term, searchArea, kind);
   const lookupAutomatically = term.length >= 2 && suggestions.length === 0;
+  const searching = lookingUp || (lookupAutomatically && onlineResults === null && !lookupError);
+  const canUseKeyword = !suggestions.length && (!!lookupError || onlineResults?.length === 0);
 
   useEffect(() => {
     if (!term || picked || (!lookupAutomatically && lookupAttempt === 0)) return;
@@ -70,7 +72,7 @@ export default function MapPlaceSearch({ destination, onSelect, onInvalidLink, k
     setLookupAttempt(attempt => attempt + 1);
   }
 
-  function choose(place: ItineraryPlace) {
+  function choose(place: Pick<ItineraryPlace, 'name' | 'address'>) {
     clearLookup();
     setPicked(place);
     setQuery(place.name);
@@ -108,23 +110,24 @@ export default function MapPlaceSearch({ destination, onSelect, onInvalidLink, k
     <Text style={s.label}>{fieldLabel}</Text>
     <TextInput accessibilityLabel={fieldLabel} value={query} onChangeText={value => { if (value.trim() !== term) clearLookup(); setError(''); setQuery(value); }} maxLength={150} placeholder={food ? '例如：拉麵、咖啡、牛肉湯' : '例如：清水、台北 101、拉麵'} placeholderTextColor="#87917D" style={s.input} returnKeyType="search" onSubmitEditing={lookup} />
     {!term && <Text style={s.caption}>輸入關鍵字後，從下方結果選取，就能帶入名稱與地址或地區。</Text>}
-    <View style={[s.row, { flexWrap: 'wrap' }]}>{[{ active: useDestination, value: true, text: `搭配${destination || '旅行目的地'}` }, { active: !useDestination, value: false, text: '自行輸入城市' }].map(item => <Pressable key={item.text} accessibilityRole="button" accessibilityState={{ selected: item.active }} onPress={() => { if (useDestination !== item.value) { clearLookup(); setUseDestination(item.value); } }} style={[s.chip, item.active && { backgroundColor: '#32644D' }]}><Text style={{ color: item.active ? 'white' : '#32644D', fontSize: 12 }}>{item.text}</Text></Pressable>)}</View>
     {!!term && <>
       {picked ? <View accessible accessibilityLiveRegion="polite" style={s.result}>
         <Ionicons name="checkmark-circle-outline" size={21} color="#32644D" />
         <View style={s.resultBody}><Text style={s.label}>已帶入 {name || picked.name}</Text>{!!address && <Text style={s.caption}>{address}</Text>}</View>
       </View> : <>
-        {!!suggestions.length && <><Text style={s.label}>常見{resultType}</Text>{resultList(suggestions)}</>}
-        {lookingUp && <Text accessibilityLiveRegion="polite" style={s.caption}>正在搜尋{resultType}…</Text>}
-        {!lookingUp && <Pressable accessibilityRole="button" onPress={lookup} style={s.primary}><Ionicons name="search-outline" size={18} color="white" /><Text style={s.primaryText}>{lookupError ? '重試線上搜尋' : `線上搜尋${resultType}`}</Text></Pressable>}
+        {!!suggestions.length && resultList(suggestions)}
+        {searching && <Text accessibilityLiveRegion="polite" style={s.caption}>正在搜尋「{term}」…</Text>}
         {!!lookupError && <Text accessibilityRole="alert" style={s.error}>{lookupError}</Text>}
         {onlineResults && <>
           <Text accessibilityLiveRegion="polite" style={s.label}>{onlineResults.length ? '線上搜尋結果' : `找不到${resultType}，請試試更完整的名稱或自行輸入城市。`}</Text>
           {resultList(onlineResults)}
-          <Text accessibilityRole="link" onPress={() => Linking.openURL('https://www.openstreetmap.org/copyright').catch(() => setError('無法開啟資料來源連結。'))} style={s.badge}>© OpenStreetMap 貢獻者</Text>
+          {!!onlineResults.length && <Text accessibilityRole="link" onPress={() => Linking.openURL('https://www.openstreetmap.org/copyright').catch(() => setError('無法開啟資料來源連結。'))} style={s.badge}>© OpenStreetMap 貢獻者</Text>}
         </>}
+        {canUseKeyword && <Pressable accessibilityRole="button" onPress={() => choose({ name: term, address: '' })} style={s.action}><Text style={s.actionText}>用「{term}」填入名稱</Text></Pressable>}
+        {!searching && <Pressable accessibilityRole="button" onPress={lookup} style={s.primary}><Ionicons name="search-outline" size={18} color="white" /><Text style={s.primaryText}>{lookupError ? '重試線上搜尋' : `線上搜尋${resultType}`}</Text></Pressable>}
       </>}
     </>}
+    {!picked && <View style={[s.row, { flexWrap: 'wrap' }]}>{[{ active: useDestination, value: true, text: `搭配${destination || '旅行目的地'}` }, { active: !useDestination, value: false, text: '自行輸入城市' }].map(item => <Pressable key={item.text} accessibilityRole="button" accessibilityState={{ selected: item.active }} onPress={() => { if (useDestination !== item.value) { clearLookup(); setUseDestination(item.value); } }} style={[s.chip, item.active && { backgroundColor: '#32644D' }]}><Text style={{ color: item.active ? 'white' : '#32644D', fontSize: 12 }}>{item.text}</Text></Pressable>)}</View>}
     <Pressable accessibilityRole="button" onPress={() => search()} style={s.action}><Ionicons name="open-outline" size={18} color="#32644D" /><Text style={s.actionText}>到 Google Maps 搜尋{food ? '美食' : '地點'}</Text></Pressable>
     {food && <><Pressable accessibilityRole="button" onPress={() => search(true)} style={s.action}><Ionicons name="locate-outline" size={18} color="#32644D" /><Text style={s.actionText}>到 Google Maps 找目前附近美食</Text></Pressable><Text style={s.caption}>附近位置由 Google Maps 判斷；若需要定位，會由 Google Maps 詢問。本 App 不會讀取或儲存你的目前位置。</Text></>}
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}

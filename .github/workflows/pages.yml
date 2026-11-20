@@ -47,7 +47,7 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           const appOrigin = `https://${process.env.GITHUB_REPOSITORY_OWNER.toLowerCase()}.github.io`;
-          for (const query of ['西芳寺', '瓢亭']) {
+          for (const query of ['西芳寺', '民主火雞肉飯']) {
             try {
               const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5`;
               const response = await fetch(url, { headers: { Origin: appOrigin }, signal: AbortSignal.timeout(10000) });

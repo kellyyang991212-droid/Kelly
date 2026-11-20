@@ -44,13 +44,14 @@ const restaurants = [
   ['台北', '金峰魯肉飯', '中正區', '滷肉飯 小吃'],
   ['台北', '鼎泰豐 101店', '信義區', '小籠包 101'],
   ['台北', '興波咖啡 華山旗艦店', '中正區', '咖啡 Coffee Cafe Simple Kaffa'],
+  ['嘉義', '民主火雞肉飯', '東區民族路149號', '嘉義市 嘉義火雞肉飯'],
   ['東京', '一蘭 澀谷店', '澀谷區', '拉麵 ラーメン Ramen Ichiran 渋谷'],
   ['大阪', '道頓堀 今井本店', '中央區', '烏龍麵 うどん'],
   ['大阪', '金龍拉麵 道頓堀店', '中央區', '拉麵 ラーメン Ramen'],
 ];
 const allPlaces = [...sights, ...restaurants];
 
-const normalize = (value: string) => value.normalize('NFKC').replace(/臺/g, '台').replace(/\s+/g, '').toLowerCase();
+const normalize = (value: string) => value.normalize('NFKC').replace(/臺/g, '台').replace(/火雞肉飯/g, '雞肉飯').replace(/\s+/g, '').toLowerCase();
 
 export function findItineraryPlaces(query: string, destination: string, kind: SearchKind = 'places'): ItineraryPlace[] {
   const terms = query.trim().split(/\s+/).filter(Boolean).map(normalize);

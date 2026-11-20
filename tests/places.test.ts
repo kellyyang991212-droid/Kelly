@@ -24,6 +24,13 @@ test('美食收藏可搜尋餐點與店名，優先列出目的地的店家', ()
   assert.deepEqual(findItineraryPlaces('赤崁樓', '台南', 'food'), []);
 });
 
+test('民主雞肉飯與民主火雞肉飯在行程和美食搜尋都會找到同一間嘉義店家', () => {
+  const [place] = findItineraryPlaces('民主雞肉飯', '');
+  assert.equal(place?.name, '民主火雞肉飯');
+  assert.equal(place?.address, '嘉義・東區民族路149號');
+  assert.deepEqual(findItineraryPlaces('民主火雞肉飯', '嘉義', 'food'), [place]);
+});
+
 test('美食線上搜尋只列餐飲，新增行程可選取餐飲和景點', async t => {
   const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ features: [
     { properties: { name: '測試咖啡店', city: '台南市', district: '中西區', osm_key: 'amenity', osm_value: 'cafe' } },
