@@ -68,7 +68,14 @@ type PhotonProperties = Partial<Record<'name' | 'street' | 'housenumber' | 'dist
 const foodTags = ['amenity:restaurant', 'amenity:cafe', 'amenity:fast_food', 'amenity:food_court', 'amenity:ice_cream', 'shop:bakery', 'shop:pastry', 'shop:confectionery'];
 
 export async function searchItineraryPlaces(query: string, destination: string, signal: AbortSignal, kind: SearchKind = 'places'): Promise<ItineraryPlace[]> {
-  const terms = [destination.replace(/・/g, ' ').trim(), query.trim()].filter(Boolean).join(' ');
+  const keywords = query.trim();
+  if (!keywords) return [];
+  const terms = `${destination.replace(/・/g, ' ').trim()} ${keywords}`.trim();
+  const results = await fetchPhotonPlaces(terms, signal, kind);
+  return results.length || terms === keywords ? results : fetchPhotonPlaces(keywords, signal, kind);
+}
+
+async function fetchPhotonPlaces(terms: string, signal: AbortSignal, kind: SearchKind): Promise<ItineraryPlace[]> {
   const filters = kind === 'food' ? foodTags.map(tag => `&osm_tag=${encodeURIComponent(tag)}`).join('') : '';
   const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(terms)}&limit=5${filters}`;
   const response = await fetch(url, { signal });

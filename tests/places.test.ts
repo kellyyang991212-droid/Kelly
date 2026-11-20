@@ -40,6 +40,20 @@ test('美食線上搜尋只列餐飲，新增行程可選取餐飲和景點', as
   assert.equal(itineraryUrl.searchParams.has('osm_tag'), false);
 });
 
+test('搭配旅行目的地找不到時，線上搜尋會再試原始關鍵字', async t => {
+  const queries: string[] = [];
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    const query = new URL(url).searchParams.get('q')!;
+    queries.push(query);
+    return Response.json({ features: query === '西芳寺' ? [
+      { properties: { name: '西芳寺', city: '京都市', district: '西京區' } },
+    ] : [] });
+  });
+  const results = await searchItineraryPlaces('西芳寺', '日本・京都', new AbortController().signal);
+  assert.deepEqual(queries, ['日本 京都 西芳寺', '西芳寺']);
+  assert.equal(results[0]?.address, '京都市・西京區');
+});
+
 test('中文部分字詞可列出景點，示範 ID 不偽裝成 Google Place ID', async () => {
   const suggestions = demoSuggestions('清水', '日本・京都', 'trip');
   assert.deepEqual(suggestions.map(p => p.name), ['清水寺', '清水坂']);

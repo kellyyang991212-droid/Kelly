@@ -43,6 +43,26 @@ jobs:
         run: pnpm test
       - name: Verify shared-trip backend
         run: node scripts/verify-shared-trips.mjs
+      - name: Check online place search
+        run: |
+          node --input-type=module <<'JS'
+          const appOrigin = `https://${process.env.GITHUB_REPOSITORY_OWNER.toLowerCase()}.github.io`;
+          for (const query of ['西芳寺', '瓢亭']) {
+            try {
+              const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(query)}&limit=5`;
+              const response = await fetch(url, { headers: { Origin: appOrigin }, signal: AbortSignal.timeout(10000) });
+              if (!response.ok) throw new Error(`HTTP ${response.status}`);
+              const origin = response.headers.get('access-control-allow-origin');
+              if (origin !== '*' && origin !== appOrigin) throw new Error('browser origin is not allowed');
+              const data = await response.json();
+              const count = data.features?.filter(place => place.properties?.name).length ?? 0;
+              if (!count) throw new Error('no named places returned');
+              console.log(`::notice title=Photon place search::${query} returned ${count} named results and allows the Pages origin.`);
+            } catch (error) {
+              console.log(`::warning title=Photon place search::${query}: ${error.message}`);
+            }
+          }
+          JS
       - name: Export Expo web app
         run: pnpm export:web
       - name: Verify Pages paths and prepare static output

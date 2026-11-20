@@ -48,7 +48,7 @@ pnpm ios
 
 ## 原型界線
 
-按「線上搜尋地點」或「線上搜尋店家」才會將關鍵字及所選目的地送到 Photon。評價與營業時間可到 Google Maps 查看。若 App 被系統終止，未儲存表單仍可能遺失。
+內建清單找不到時，輸入至少兩個字元並停頓，會將關鍵字及所選目的地送到 Photon 查詢。也可手動按「線上搜尋地點」或「線上搜尋店家」。若搭配目的地找不到，會再用關鍵字查詢。評價與營業時間可到 Google Maps 查看。
 
 技術依據：[Google Maps URLs 官方文件](https://developers.google.com/maps/documentation/urls/get-started)。
 

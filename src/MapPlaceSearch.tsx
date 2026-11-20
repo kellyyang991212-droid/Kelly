@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { googleMapsUrl, parseGoogleMapsLink } from './domain';
@@ -20,45 +20,54 @@ export default function MapPlaceSearch({ destination, onSelect, onInvalidLink, k
   const [onlineResults, setOnlineResults] = useState<ItineraryPlace[] | null>(null);
   const [lookingUp, setLookingUp] = useState(false);
   const [lookupError, setLookupError] = useState('');
-  const activeLookup = useRef<AbortController | null>(null);
+  const [lookupAttempt, setLookupAttempt] = useState(0);
   const food = kind === 'food';
   const resultType = food ? '店家' : '地點';
   const fieldLabel = food ? '美食關鍵字' : '景點或美食關鍵字';
   const searchArea = useDestination ? destination : '';
-  const suggestions = picked ? [] : findItineraryPlaces(query, searchArea, kind);
-  useEffect(() => () => {
-    activeLookup.current?.abort();
-    activeLookup.current = null;
-  }, []);
+  const term = query.trim();
+  const suggestions = picked ? [] : findItineraryPlaces(term, searchArea, kind);
+  const lookupAutomatically = term.length >= 2 && suggestions.length === 0;
+
+  useEffect(() => {
+    if (!term || picked || (!lookupAutomatically && lookupAttempt === 0)) return;
+
+    const controller = new AbortController();
+    let current = true;
+    const debounce = setTimeout(async () => {
+      setLookingUp(true);
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      try {
+        const results = await searchItineraryPlaces(term, searchArea, controller.signal, kind);
+        if (current) setOnlineResults(results);
+      } catch {
+        if (current) setLookupError('線上搜尋暫時無法使用。可重試、開啟 Google Maps，或在下方手動填寫。');
+      } finally {
+        clearTimeout(timeout);
+        if (current) setLookingUp(false);
+      }
+    }, lookupAttempt > 0 ? 0 : 900);
+
+    return () => {
+      current = false;
+      clearTimeout(debounce);
+      controller.abort();
+    };
+  }, [term, searchArea, kind, picked, lookupAutomatically, lookupAttempt]);
 
   function clearLookup() {
-    activeLookup.current?.abort();
-    activeLookup.current = null;
+    setLookupAttempt(0);
     setLookingUp(false);
     setOnlineResults(null);
     setLookupError('');
     setPicked(null);
   }
 
-  async function lookup() {
-    if (!query.trim() || picked || activeLookup.current) return;
-    clearLookup();
-    const controller = new AbortController();
-    activeLookup.current = controller;
-    setLookingUp(true);
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    try {
-      const results = await searchItineraryPlaces(query, searchArea, controller.signal, kind);
-      if (activeLookup.current === controller) setOnlineResults(results);
-    } catch {
-      if (activeLookup.current === controller) setLookupError('線上搜尋暫時無法使用。請重試，或在下方手動填寫。');
-    } finally {
-      clearTimeout(timeout);
-      if (activeLookup.current === controller) {
-        activeLookup.current = null;
-        setLookingUp(false);
-      }
-    }
+  function lookup() {
+    if (!term || picked || lookingUp) return;
+    setLookupError('');
+    setOnlineResults(null);
+    setLookupAttempt(attempt => attempt + 1);
   }
 
   function choose(place: ItineraryPlace) {
@@ -97,13 +106,17 @@ export default function MapPlaceSearch({ destination, onSelect, onInvalidLink, k
   return <View style={s.panel}>
     <View style={s.row}><Ionicons name={food ? 'restaurant-outline' : 'search-outline'} size={22} color="#32644D" /><Text style={s.heading}>搜尋並選取{resultType}</Text></View>
     <Text style={s.label}>{fieldLabel}</Text>
-    <TextInput accessibilityLabel={fieldLabel} value={query} onChangeText={value => { clearLookup(); setError(''); setQuery(value); }} maxLength={150} placeholder={food ? '例如：拉麵、咖啡、牛肉湯' : '例如：清水、台北 101、拉麵'} placeholderTextColor="#87917D" style={s.input} returnKeyType="search" onSubmitEditing={lookup} />
+    <TextInput accessibilityLabel={fieldLabel} value={query} onChangeText={value => { if (value.trim() !== term) clearLookup(); setError(''); setQuery(value); }} maxLength={150} placeholder={food ? '例如：拉麵、咖啡、牛肉湯' : '例如：清水、台北 101、拉麵'} placeholderTextColor="#87917D" style={s.input} returnKeyType="search" onSubmitEditing={lookup} />
+    {!term && <Text style={s.caption}>輸入關鍵字後，從下方結果選取，就能帶入名稱與地址或地區。</Text>}
     <View style={[s.row, { flexWrap: 'wrap' }]}>{[{ active: useDestination, value: true, text: `搭配${destination || '旅行目的地'}` }, { active: !useDestination, value: false, text: '自行輸入城市' }].map(item => <Pressable key={item.text} accessibilityRole="button" accessibilityState={{ selected: item.active }} onPress={() => { if (useDestination !== item.value) { clearLookup(); setUseDestination(item.value); } }} style={[s.chip, item.active && { backgroundColor: '#32644D' }]}><Text style={{ color: item.active ? 'white' : '#32644D', fontSize: 12 }}>{item.text}</Text></Pressable>)}</View>
-    {!!query.trim() && <>
-      {picked ? <Text accessibilityLiveRegion="polite" style={s.badge}>已帶入 {picked.name}</Text> : <>
+    {!!term && <>
+      {picked ? <View accessible accessibilityLiveRegion="polite" style={s.result}>
+        <Ionicons name="checkmark-circle-outline" size={21} color="#32644D" />
+        <View style={s.resultBody}><Text style={s.label}>已帶入 {name || picked.name}</Text>{!!address && <Text style={s.caption}>{address}</Text>}</View>
+      </View> : <>
         {!!suggestions.length && <><Text style={s.label}>常見{resultType}</Text>{resultList(suggestions)}</>}
-        {!suggestions.length && !lookingUp && onlineResults === null && !lookupError && <Text style={s.caption}>內建清單沒有符合的{resultType}，可試試線上搜尋。</Text>}
-        <Pressable accessibilityRole="button" disabled={lookingUp} onPress={lookup} style={s.primary}><Ionicons name="search-outline" size={18} color="white" /><Text style={s.primaryText}>{lookingUp ? `正在搜尋${resultType}…` : `線上搜尋${resultType}`}</Text></Pressable>
+        {lookingUp && <Text accessibilityLiveRegion="polite" style={s.caption}>正在搜尋{resultType}…</Text>}
+        {!lookingUp && <Pressable accessibilityRole="button" onPress={lookup} style={s.primary}><Ionicons name="search-outline" size={18} color="white" /><Text style={s.primaryText}>{lookupError ? '重試線上搜尋' : `線上搜尋${resultType}`}</Text></Pressable>}
         {!!lookupError && <Text accessibilityRole="alert" style={s.error}>{lookupError}</Text>}
         {onlineResults && <>
           <Text accessibilityLiveRegion="polite" style={s.label}>{onlineResults.length ? '線上搜尋結果' : `找不到${resultType}，請試試更完整的名稱或自行輸入城市。`}</Text>
