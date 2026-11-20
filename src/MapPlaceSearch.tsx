@@ -22,8 +22,8 @@ export default function MapPlaceSearch({ destination, onSelect, onInvalidLink, k
   const [lookupError, setLookupError] = useState('');
   const activeLookup = useRef<AbortController | null>(null);
   const food = kind === 'food';
-  const resultType = food ? '店家' : '景點';
-  const fieldLabel = food ? '美食關鍵字' : '景點關鍵字';
+  const resultType = food ? '店家' : '地點';
+  const fieldLabel = food ? '美食關鍵字' : '景點或美食關鍵字';
   const searchArea = useDestination ? destination : '';
   const suggestions = picked ? [] : findItineraryPlaces(query, searchArea, kind);
   useEffect(() => () => {
@@ -97,7 +97,7 @@ export default function MapPlaceSearch({ destination, onSelect, onInvalidLink, k
   return <View style={s.panel}>
     <View style={s.row}><Ionicons name={food ? 'restaurant-outline' : 'search-outline'} size={22} color="#32644D" /><Text style={s.heading}>搜尋並選取{resultType}</Text></View>
     <Text style={s.label}>{fieldLabel}</Text>
-    <TextInput accessibilityLabel={fieldLabel} value={query} onChangeText={value => { clearLookup(); setError(''); setQuery(value); }} maxLength={150} placeholder={food ? '例如：拉麵、咖啡、牛肉湯' : '例如：清水、台北 101、赤崁樓'} placeholderTextColor="#87917D" style={s.input} returnKeyType="search" onSubmitEditing={lookup} />
+    <TextInput accessibilityLabel={fieldLabel} value={query} onChangeText={value => { clearLookup(); setError(''); setQuery(value); }} maxLength={150} placeholder={food ? '例如：拉麵、咖啡、牛肉湯' : '例如：清水、台北 101、拉麵'} placeholderTextColor="#87917D" style={s.input} returnKeyType="search" onSubmitEditing={lookup} />
     <View style={[s.row, { flexWrap: 'wrap' }]}>{[{ active: useDestination, value: true, text: `搭配${destination || '旅行目的地'}` }, { active: !useDestination, value: false, text: '自行輸入城市' }].map(item => <Pressable key={item.text} accessibilityRole="button" accessibilityState={{ selected: item.active }} onPress={() => { if (useDestination !== item.value) { clearLookup(); setUseDestination(item.value); } }} style={[s.chip, item.active && { backgroundColor: '#32644D' }]}><Text style={{ color: item.active ? 'white' : '#32644D', fontSize: 12 }}>{item.text}</Text></Pressable>)}</View>
     {!!query.trim() && <>
       {picked ? <Text accessibilityLiveRegion="polite" style={s.badge}>已帶入 {picked.name}</Text> : <>
@@ -112,14 +112,14 @@ export default function MapPlaceSearch({ destination, onSelect, onInvalidLink, k
         </>}
       </>}
     </>}
-    <Pressable accessibilityRole="button" onPress={() => search()} style={s.action}><Ionicons name="open-outline" size={18} color="#32644D" /><Text style={s.actionText}>到 Google Maps 搜尋{food ? '美食' : '景點'}</Text></Pressable>
+    <Pressable accessibilityRole="button" onPress={() => search()} style={s.action}><Ionicons name="open-outline" size={18} color="#32644D" /><Text style={s.actionText}>到 Google Maps 搜尋{food ? '美食' : '地點'}</Text></Pressable>
     {food && <><Pressable accessibilityRole="button" onPress={() => search(true)} style={s.action}><Ionicons name="locate-outline" size={18} color="#32644D" /><Text style={s.actionText}>到 Google Maps 找目前附近美食</Text></Pressable><Text style={s.caption}>附近位置由 Google Maps 判斷；若需要定位，會由 Google Maps 詢問。本 App 不會讀取或儲存你的目前位置。</Text></>}
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
     <View style={s.divider} />
     <Text style={s.label}>{resultType}資料（可手動修改）</Text>
     {opened && <Text accessibilityLiveRegion="polite" style={s.caption}>已開啟地圖。查好後回到這裡填寫，表單會保留；請在關閉 App 前完成儲存。</Text>}
-    <Text style={s.label}>{food ? '店家名稱（必填）' : '景點名稱（可作為行程名稱）'}</Text>
-    <TextInput accessibilityLabel={food ? '店家名稱' : '景點名稱'} value={name} onChangeText={v => update(v, address, sharedLink)} maxLength={120} placeholder={food ? '填入在 Google Maps 找到的店名' : '例如：清水寺'} placeholderTextColor="#87917D" style={s.input} />
+    <Text style={s.label}>{food ? '店家名稱（必填）' : '地點名稱（可作為行程名稱）'}</Text>
+    <TextInput accessibilityLabel={food ? '店家名稱' : '地點名稱'} value={name} onChangeText={v => update(v, address, sharedLink)} maxLength={120} placeholder={food ? '例如：本家第一旭 本店' : '例如：清水寺'} placeholderTextColor="#87917D" style={s.input} />
     <Text style={s.label}>地址或地區（選填）</Text>
     <TextInput accessibilityLabel="保存的地點地址" value={address} onChangeText={v => update(name, v, sharedLink)} maxLength={200} placeholder="貼上地址，或填寫所在城市／區域" placeholderTextColor="#87917D" style={s.input} />
     <Text style={s.label}>Google Maps 分享連結（選填）</Text>

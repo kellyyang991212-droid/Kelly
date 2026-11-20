@@ -11,6 +11,7 @@ test('新增行程可用部分名稱、別名及地區搜尋，優先顯示旅�
   assert.equal(findItineraryPlaces('古蹟', '台南')[0].name, '赤崁樓');
   assert.equal(findItineraryPlaces('臺北 １０１', '')[0].name, '台北 101');
   assert.equal(findItineraryPlaces('千本鳥居', '')[0].name, '伏見稻荷大社');
+  assert.equal(findItineraryPlaces('京都 拉麵', '日本・京都')[0].name, '本家第一旭 本店');
   assert.deepEqual(findItineraryPlaces('未知地點xyz', '台南'), []);
 });
 
@@ -23,7 +24,7 @@ test('美食收藏可搜尋餐點與店名，優先列出目的地的店家', ()
   assert.deepEqual(findItineraryPlaces('赤崁樓', '台南', 'food'), []);
 });
 
-test('美食線上搜尋只將餐飲結果提供選取', async t => {
+test('美食線上搜尋只列餐飲，新增行程可選取餐飲和景點', async t => {
   const fetch = t.mock.method(globalThis, 'fetch', async () => Response.json({ features: [
     { properties: { name: '測試咖啡店', city: '台南市', district: '中西區', osm_key: 'amenity', osm_value: 'cafe' } },
     { properties: { name: '測試景點', city: '台南市', osm_key: 'tourism', osm_value: 'attraction' } },
@@ -33,6 +34,10 @@ test('美食線上搜尋只將餐飲結果提供選取', async t => {
   const url = new URL(String(fetch.mock.calls[0].arguments[0]));
   assert.equal(url.searchParams.get('q'), '台南 咖啡');
   assert.ok(url.searchParams.getAll('osm_tag').includes('amenity:cafe'));
+  const itineraryResults = await searchItineraryPlaces('台南 中西區', '', new AbortController().signal);
+  assert.deepEqual(itineraryResults.map(place => place.name), ['測試咖啡店', '測試景點']);
+  const itineraryUrl = new URL(String(fetch.mock.calls[1].arguments[0]));
+  assert.equal(itineraryUrl.searchParams.has('osm_tag'), false);
 });
 
 test('中文部分字詞可列出景點，示範 ID 不偽裝成 Google Place ID', async () => {

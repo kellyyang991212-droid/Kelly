@@ -34,7 +34,7 @@ const restaurants = [
   ['京都', '本家第一旭 本店', '下京區', '拉麵 ラーメン Ramen 京都車站'],
   ['京都', '新福菜館 本店', '下京區', '拉麵 ラーメン Ramen 炒飯 京都車站'],
   ['京都', '麵屋豬一', '下京區', '麺屋猪一 拉麵 ラーメン Ramen'],
-  ['京都', '% Arabica 京都東山店', '東山區', '咖啡 カフェ Coffee Cafe 清水寺'],
+  ['京都', '% Arabica 京都東山店', '東山區', '咖啡 カフェ Coffee Cafe 八坂通'],
   ['京都', '祇園辻利 祇園本店', '東山區', '抹茶 甜點 Matcha'],
   ['台南', '文章牛肉湯 安平總店', '安平區', '牛肉湯 早餐'],
   ['台南', '六千牛肉湯', '中西區', '牛肉湯 早餐'],
@@ -48,6 +48,7 @@ const restaurants = [
   ['大阪', '道頓堀 今井本店', '中央區', '烏龍麵 うどん'],
   ['大阪', '金龍拉麵 道頓堀店', '中央區', '拉麵 ラーメン Ramen'],
 ];
+const allPlaces = [...sights, ...restaurants];
 
 const normalize = (value: string) => value.normalize('NFKC').replace(/臺/g, '台').replace(/\s+/g, '').toLowerCase();
 
@@ -56,7 +57,7 @@ export function findItineraryPlaces(query: string, destination: string, kind: Se
   if (!terms.length) return [];
 
   const region = normalize(destination);
-  return (kind === 'food' ? restaurants : sights)
+  return (kind === 'food' ? restaurants : allPlaces)
     .filter(([city, name, area, aliases]) => terms.every(term => normalize(`${name} ${city} ${area} ${aliases}`).includes(term)))
     .sort(([a], [b]) => Number(region.includes(b)) - Number(region.includes(a)))
     .slice(0, 5)
