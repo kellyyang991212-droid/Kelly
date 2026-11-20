@@ -57,7 +57,6 @@ function Journal() {
   const [end, setEnd] = useState('2026-12-03');
   const [time, setTime] = useState('12:00');
   const [note, setNote] = useState('');
-  const [location, setLocation] = useState('');
   const [chosenLocation, setChosenLocation] = useState<MapPlaceDraft | null>(null);
   const [placeLinkInvalid, setPlaceLinkInvalid] = useState(false);
   const [amount, setAmount] = useState('');
@@ -91,9 +90,12 @@ function Journal() {
   const changeTab = (value: Tab) => { setTab(value); scrollRef.current?.scrollTo({ y: 0, animated: false }); };
   const open = (value: Sheet, place?: Place) => {
     setChosenLocation(null); setPlaceLinkInvalid(false);
-    setError(''); setTitle(value === 'expense' && place ? place.name : ''); setNote(''); setLocation(''); setAmount(''); setTime('12:00'); setFormDay(day); setPayer('me'); setParticipants(trip?.members.map(m => m.id) ?? ['me']); setSelectedPlace(place ?? null); setSheet(value);
+    setError(''); setTitle(value === 'expense' && place ? place.name : ''); setNote(''); setAmount(''); setTime('12:00'); setFormDay(day); setPayer('me'); setParticipants(trip?.members.map(m => m.id) ?? ['me']); setSelectedPlace(place ?? null); setSheet(value);
   };
-  const mapQuery = () => location.trim() || (title.trim() ? `${trip?.destination ?? ''} ${title.trim()}`.trim() : '');
+  function chooseEventLocation(place: MapPlaceDraft | null) {
+    if (place?.name) setTitle(current => !current.trim() || current === chosenLocation?.name ? place.name : current);
+    setChosenLocation(place);
+  }
   async function launchMap(query: string, action: 'search' | 'directions' = 'search', googlePlaceId?: string, sharedLink?: string) {
     try {
       const url = action === 'search' && sharedLink ? parseGoogleMapsLink(sharedLink)! : googleMapsUrl(query, action, googlePlaceId);
@@ -129,8 +131,11 @@ function Journal() {
       if (sheet === 'place' && selectedPlace) {
         update(t => addPlaceToTrip(t, selectedPlace, formDay, time));
       } else {
-        try { googleMapsUrl(mapQuery()); } catch (cause) { return setError((cause as Error).message); }
-        update(t => ({ ...t, events: [...t.events, { id: uid(), title: title.trim(), time, day: formDay, note: note.trim(), mapQuery: chosenLocation ? `${chosenLocation.name || title.trim()} ${chosenLocation.address || t.destination}` : mapQuery(), mapUrl: chosenLocation?.mapUrl, category: '自訂', done: false }] }));
+        const mapQuery = chosenLocation
+          ? `${chosenLocation.name || title.trim()} ${chosenLocation.address || trip.destination}`.trim()
+          : `${trip.destination} ${title.trim()}`.trim();
+        try { googleMapsUrl(mapQuery); } catch (cause) { return setError((cause as Error).message); }
+        update(t => ({ ...t, events: [...t.events, { id: uid(), title: title.trim(), time, day: formDay, note: note.trim(), mapQuery, mapUrl: chosenLocation?.mapUrl, category: '自訂', done: false }] }));
       }
       setDay(formDay); setTab('行程'); setSheet(null); notify('已加入行程・本機示範');
     }
@@ -243,7 +248,7 @@ function Journal() {
     <View style={s.modalNotice}><Icon name="flask-outline" size={17} color={C.green} /><Text style={[s.micro, { color: C.green, flex: 1 }]}>可操作原型・本機體驗，尚未串接雲端</Text></View>
     {sheet === 'foodSearch' && <MapPlaceSearch kind="food" destination={trip?.destination ?? ''} onInvalidLink={setPlaceLinkInvalid} onSelect={setChosenLocation} />}{sheet === 'create' && <><Text style={s.body}>給這段共同的回憶，取個喜歡的名字。</Text><Field label="旅行名稱" value={title} onChangeText={setTitle} placeholder="例如：和家人的台南週末" /><Field label="目的地" value={destination} onChangeText={setDestination} placeholder="例如：台灣・台南" /><Field label="出發日期（YYYY-MM-DD）" value={start} onChangeText={setStart} /><Field label="結束日期（YYYY-MM-DD）" value={end} onChangeText={setEnd} /><Text style={s.micro}>最多 31 天。建立後由自己一位成員開始；邀請功能尚待串接。</Text></>}
     {(sheet === 'event' || sheet === 'place' || sheet === 'expense') && <>
-      {sheet === 'event' && <MapPlaceSearch destination={trip?.destination ?? ''} onInvalidLink={setPlaceLinkInvalid} onSelect={place => { setChosenLocation(place); setLocation(place?.address ?? ''); if (place?.name) setTitle(place.name); }} />}
+      {sheet === 'event' && <MapPlaceSearch destination={trip?.destination ?? ''} onInvalidLink={setPlaceLinkInvalid} onSelect={chooseEventLocation} />}
       {sheet === 'place' && selectedPlace ? <View style={s.row}><Photo uri={selectedPlace.image} style={{ width: 75, height: 75, borderRadius: 10 }} /><View style={{ gap: 8, flex: 1 }}><Text style={s.cardTitle}>{selectedPlace.name}</Text><Text style={s.micro}>加入行程時也會一起收藏</Text></View></View> : <Field label={sheet === 'expense' ? '支出名稱' : '行程名稱'} value={title} onChangeText={setTitle} placeholder={sheet === 'expense' ? '例如：大家一起吃拉麵' : '想一起去的地方'} />}
       <Text style={s.label}>選擇日期</Text><ScrollView horizontal contentContainerStyle={{ gap: 8 }}>{days.map((d, i) => <Chip key={d} active={formDay === i} onPress={() => setFormDay(i)}>{shortDate(d)}・第 {i + 1} 天</Chip>)}</ScrollView>
       {sheet !== 'expense' && <Field label="時間（24 小時制）" value={time} onChangeText={setTime} placeholder="12:00" />}

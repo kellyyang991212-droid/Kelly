@@ -2,6 +2,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { demoSuggestions, newPlacesSession, selectPlace } from '../src/places.ts';
 import { googleMapsUrl } from '../src/domain.ts';
+import { findItineraryPlaces } from '../src/itineraryPlaces.ts';
+
+test('新增行程可用部分名稱、別名及地區搜尋，優先顯示旅行目的地的景點', () => {
+  const matches = findItineraryPlaces('清水', '日本・京都');
+  assert.deepEqual(matches.map(place => place.name), ['清水寺', '清水坂']);
+  assert.equal(matches[0].address, '京都・東山區');
+  assert.equal(findItineraryPlaces('古蹟', '台南')[0].name, '赤崁樓');
+  assert.equal(findItineraryPlaces('臺北 １０１', '')[0].name, '台北 101');
+  assert.equal(findItineraryPlaces('千本鳥居', '')[0].name, '伏見稻荷大社');
+  assert.deepEqual(findItineraryPlaces('未知地點xyz', '台南'), []);
+});
 
 test('中文部分字詞可列出景點，示範 ID 不偽裝成 Google Place ID', async () => {
   const suggestions = demoSuggestions('清水', '日本・京都', 'trip');
