@@ -39,8 +39,8 @@ Remove-Item Env:EXPO_BASE_PATH
 
 1. 建立 Supabase 專案，在 Authentication 的登入方式啟用 **Anonymous Sign-ins**。
 2. 在 SQL Editor 執行 [共用旅行 migration](../supabase/migrations/20261120000000_shared_trips.sql)。
-3. 在 GitHub 儲存庫 Settings → Secrets and variables → Actions → Variables 設定 `EXPO_PUBLIC_SUPABASE_URL`（Project URL）。使用新金鑰時設定 `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`（以 `sb_publishable_` 開頭）；使用 Legacy API keys 時設定 `EXPO_PUBLIC_SUPABASE_ANON_KEY`（公開 `anon` 金鑰）。公開金鑰與 URL 會進入 Web bundle。具管理權限的金鑰需留在伺服器端。
-4. 重新執行 GitHub Pages 工作流程。本機開發可將同樣的兩個值放入 `.env`，再重新啟動 Expo。
+3. Kelly 的 GitHub Pages 工作流程有公開的預設連線設定。要使用另一個專案，可在 GitHub 儲存庫 Settings → Secrets and variables → Actions → Variables 設定 `EXPO_PUBLIC_SUPABASE_URL`（Project URL）。使用新金鑰時設定 `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`（以 `sb_publishable_` 開頭）；使用 Legacy API keys 時設定 `EXPO_PUBLIC_SUPABASE_ANON_KEY`（公開 `anon` 金鑰）。公開金鑰與 URL 會進入 Web bundle。具管理權限的金鑰需留在伺服器端。
+4. 執行 GitHub Pages 工作流程。發布前會檢查匿名登入和共用旅行 API 權限。本機開發可將相同的兩個值放入 `.env`，再重新啟動 Expo。
 5. 用兩個瀏覽器工作階段驗證：建立自己的旅行 → 邀請旅伴 → 產生邀請連結，讓另一個瀏覽器開啟並接受。雙方應看到同一份行程、收藏和支出。用第三個瀏覽器打開同一連結，確認已使用的邀請無法加入。
 
 邀請 24 小時有效，每個連結限一個新成員加入。建立者可以撤回未使用的邀請。加入的旅伴可以讀取既有行程、收藏與支出。行程、收藏和新增支出會在開啟旅行時同步。共用身分以瀏覽器保存的匿名工作階段識別，清除網站資料後須重新邀請，且原建立者身分需保留原工作階段。

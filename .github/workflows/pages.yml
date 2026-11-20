@@ -15,9 +15,10 @@ concurrency:
 env:
   EXPO_NO_TELEMETRY: '1'
   EXPO_BASE_PATH: /${{ github.event.repository.name }}
-  EXPO_PUBLIC_SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL }}
+  # Public browser configuration for the Kelly website. Repository variables can override it.
+  EXPO_PUBLIC_SUPABASE_URL: ${{ vars.EXPO_PUBLIC_SUPABASE_URL || 'https://ldozwogqktqnnlmqiept.supabase.co' }}
   EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY }}
-  EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+  EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.EXPO_PUBLIC_SUPABASE_ANON_KEY || (!vars.EXPO_PUBLIC_SUPABASE_URL && 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imxkb3p3b2dxa3Rxbm5sbXFpZXB0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUxNTA2MTMsImV4cCI6MjExMDcyNjYxM30.S-yt5GLlToEf0tKgB1Sa0FkN636j4J42uTE0AyZ9W1E') || '' }}
 
 jobs:
   build:
@@ -40,6 +41,8 @@ jobs:
         run: pnpm typecheck
       - name: Run domain tests
         run: pnpm test
+      - name: Verify shared-trip backend
+        run: node scripts/verify-shared-trips.mjs
       - name: Export Expo web app
         run: pnpm export:web
       - name: Verify Pages paths and prepare static output
