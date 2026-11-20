@@ -8,8 +8,9 @@ import { addPlaceToTrip, balances, googleMapsUrl, makeDemo, parseGoogleMapsLink,
 import type { Event, Place, Trip } from './src/domain';
 import MapPlaceSearch from './src/MapPlaceSearch';
 import type { MapPlaceDraft } from './src/MapPlaceSearch';
-import { acceptInvite, clearInviteLink, createInvite, getSharedTrip, inviteLink, listSharedTrips, previewInvite, publishTrip, readInviteToken, revokeInvite, saveSharedTrip, sendSharedMessage, sharingAvailable } from './src/sharedTrips';
+import { acceptInvite, clearInviteLink, createInvite, getSharedTrip, inviteLink, listSharedTrips, previewInvite, publishTrip, readInviteToken, revokeInvite, saveSharedTrip, sendSharedMessage, sharingAvailable, tokenFromInviteLink } from './src/sharedTrips';
 import type { InvitePreview, SharedTrip } from './src/sharedTrips';
+import { isStandaloneWeb, onWebResume, reloadWebApp, watchWebRelease } from './src/webPage';
 
 const C = { ink: '#263D35', green: '#32644D', muted: '#7C867B', cream: '#F6F6F0', line: '#E6E8DF', soft: '#EAF0E4', orange: '#BF704D' };
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -43,6 +44,7 @@ function Journal() {
   const [localTrips, setLocalTrips] = useState<Trip[]>([makeDemo()]);
   const [sharedTrips, setSharedTrips] = useState<SharedTrip[]>([]);
   const [ready, setReady] = useState(false);
+  const [newVersion, setNewVersion] = useState(false);
   const [storageError, setStorageError] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('行程');
@@ -72,6 +74,7 @@ function Journal() {
   const [error, setError] = useState('');
   const [memberDisplayName, setMemberDisplayName] = useState('');
   const [joinPreview, setJoinPreview] = useState<InvitePreview | null>(null);
+  const [pastedInvite, setPastedInvite] = useState('');
   const [inviteUrl, setInviteUrl] = useState('');
   const [cloudError, setCloudError] = useState('');
   const [cloudBusy, setCloudBusy] = useState(false);
@@ -101,6 +104,7 @@ function Journal() {
     return () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
   }, []);
   useEffect(() => { if (ready) AsyncStorage.setItem(STORAGE, JSON.stringify(localTrips)).catch(() => setStorageError('本機儲存失敗；目前的變更只保留到關閉畫面。')); }, [localTrips, ready]);
+  useEffect(() => watchWebRelease(() => setNewVersion(true)), []);
 
   function installShared(record: SharedTrip) {
     setSharedTrips(prev => {
@@ -112,10 +116,19 @@ function Journal() {
   useEffect(() => {
     if (!sharingAvailable) return;
     let active = true;
-    listSharedTrips().then(records => {
-      if (active) records.forEach(installShared);
-    }).catch(() => { if (active) setCloudError('目前無法讀取共用旅行，請確認網路後重新整理。'); });
-    return () => { active = false; };
+    let pending = false;
+    async function refreshList() {
+      if (pending) return;
+      pending = true;
+      try {
+        const records = await listSharedTrips();
+        if (active) { records.forEach(installShared); setCloudError(''); }
+      } catch { if (active) setCloudError('目前無法讀取共用旅行，請確認網路後再試。'); }
+      finally { pending = false; }
+    }
+    const unsubscribe = onWebResume(refreshList);
+    void refreshList();
+    return () => { active = false; unsubscribe?.(); };
   }, []);
 
   const cloudTripId = shared?.trip.id;
@@ -139,8 +152,9 @@ function Journal() {
       finally { requesting = false; }
     }
     const timer = setInterval(refresh, 5000);
+    const unsubscribe = onWebResume(refresh);
     void refresh();
-    return () => { active = false; clearInterval(timer); };
+    return () => { active = false; clearInterval(timer); unsubscribe?.(); };
   }, [cloudTripId]);
 
   useEffect(() => {
@@ -216,11 +230,19 @@ function Journal() {
     setChosenLocation(null); setPlaceLinkInvalid(false);
     setError(''); setTitle(value === 'expense' && place ? place.name : ''); setNote(''); setAmount(''); setTime('12:00'); setFormDay(day); setPayer(memberId); setParticipants(trip?.members.map(m => m.id) ?? [memberId]); setSelectedPlace(place ?? null); setSheet(value);
     if (value === 'share') { setMemberDisplayName(''); setInviteUrl(''); }
+    if (value === 'join') { resetJoin(); setMemberDisplayName(''); setPastedInvite(''); }
   };
+
+  function resetJoin() {
+    clearInviteLink();
+    setInviteToken(null);
+    setJoinPreview(null);
+    setError('');
+  }
 
   function closeSheet() {
     if (cloudPending.current) return;
-    if (sheet === 'join') { clearInviteLink(); setInviteToken(null); }
+    if (sheet === 'join') resetJoin();
     setSheet(null);
   }
 
@@ -247,6 +269,13 @@ function Journal() {
       openTrip(record.trip.id);
       notify('已加入這趟共用旅行');
     });
+  }
+
+  function previewPastedInvite() {
+    const token = tokenFromInviteLink(pastedInvite);
+    if (!token) { setError('請貼上完整的旅伴手帳邀請連結。'); return; }
+    setError('');
+    setInviteToken(token);
   }
   function chooseEventLocation(place: MapPlaceDraft | null) {
     if (place?.name) setTitle(current => !current.trim() || current === chosenLocation?.name ? place.name : current);
@@ -349,13 +378,14 @@ function Journal() {
     <View style={s.main}>
       <View style={[s.topbar, !desktop && { paddingHorizontal: 20, height: 65 }]}>
         {desktop ? <View style={s.row}><Text onPress={() => setActiveId(null)} style={s.breadcrumb}>我的旅行</Text>{trip && <><Icon name="chevron-forward" size={14} color={C.muted} /><Text style={s.breadcrumb}>{trip.title}</Text></>}</View> : <Pressable accessibilityRole="button" accessibilityLabel="返回旅行列表" onPress={() => setActiveId(null)} style={s.row}>{trip ? <Icon name="arrow-back" /> : <Icon name="leaf" color={C.green} />}<Text style={s.mobileBrand}>{trip ? '所有旅行' : '旅伴手帳'}</Text></Pressable>}
-        <View style={s.row}><View style={s.demoBadge}><View style={s.dot} /><Text style={s.demoText}>{shared ? '共用旅行' : trip?.demo || !trip ? '示範模式' : '本機旅行'}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="原型說明" onPress={() => open('help')} style={s.iconButton}><Icon name="help-circle-outline" color={C.muted} size={23} /></Pressable></View>
+        <View style={s.row}><View style={s.demoBadge}><View style={s.dot} /><Text style={s.demoText}>{shared ? '共用旅行' : trip?.demo || !trip ? '示範模式' : '本機旅行'}</Text></View>{isStandaloneWeb() && <Pressable accessibilityRole="button" accessibilityLabel="重新整理旅伴手帳" onPress={reloadWebApp} style={s.iconButton}><Icon name="refresh-outline" color={C.green} /></Pressable>}<Pressable accessibilityRole="button" accessibilityLabel="原型說明" onPress={() => open('help')} style={s.iconButton}><Icon name="help-circle-outline" color={C.muted} size={23} /></Pressable></View>
       </View>
+      {newVersion && <View style={[s.notice, { marginHorizontal: 16, marginTop: 10 }]}><Text accessibilityLiveRegion="polite" style={[s.body, { flex: 1 }]}>旅伴手帳有新版本</Text><Btn small title="更新網頁" icon="refresh-outline" onPress={reloadWebApp} /></View>}
       {storageError ? <Text accessibilityRole="alert" style={s.storageError}>{storageError}</Text> : null}
       {cloudError ? <Text accessibilityRole="alert" style={s.storageError}>{cloudError}</Text> : null}
       <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={[s.content, !desktop && { paddingHorizontal: 20, paddingTop: 24, paddingBottom: trip ? 28 : 90 }]} keyboardShouldPersistTaps="handled">
         {!trip ? <>
-          <View style={[s.welcome, !desktop && { alignItems: 'flex-start', flexDirection: 'column', gap: 20 }]}><View style={{ gap: 10 }}><Text style={s.eyebrow}>LET’S MAKE MEMORIES</Text><Text style={[s.h1, !desktop && { fontSize: 28 }]}>下一站，和喜歡的人一起。</Text><Text style={s.body}>從一個小小的計畫，開始一趟值得記住的旅行。</Text></View><Btn title="建立旅行" icon="add" onPress={() => open('create')} /></View>
+          <View style={[s.welcome, !desktop && { alignItems: 'flex-start', flexDirection: 'column', gap: 20 }]}><View style={{ gap: 10 }}><Text style={s.eyebrow}>LET’S MAKE MEMORIES</Text><Text style={[s.h1, !desktop && { fontSize: 28 }]}>下一站，和喜歡的人一起。</Text><Text style={s.body}>從一個小小的計畫，開始一趟值得記住的旅行。</Text></View><View style={[s.row, { flexWrap: 'wrap' }]}><Btn title="建立旅行" icon="add" onPress={() => open('create')} />{sharingAvailable && <Btn title="加入旅行" icon="link-outline" secondary onPress={() => open('join')} />}</View></View>
           <Pressable accessibilityRole="button" accessibilityLabel="打開京都慢慢走示範旅行" onPress={() => openTrip('kyoto-demo')} style={[s.homeHero, !desktop && { height: 330 }]}>
             <ImageBackground source={{ uri: PHOTO.kyoto }} style={s.heroImage} imageStyle={{ borderRadius: 18 }}><View style={s.heroShade} /><View style={[s.heroContent, !desktop && { padding: 25 }]}><View style={s.whiteTag}><Icon name="sparkles-outline" size={14} color="white" /><Text style={s.heroTagText}>為你準備好的示範旅行</Text></View><View style={{ flex: 1 }} /><Text style={s.heroOverline}>JAPAN · KYOTO</Text><Text style={[s.heroTitle, !desktop && { fontSize: 36 }]}>京都慢慢走</Text><Text style={s.heroSubtitle}>追一場秋色，收藏一起走過的風景。</Text><View style={[s.row, { marginTop: 22 }]}><Text style={s.heroLink}>翻開這趟旅行</Text><Icon name="arrow-forward" color="white" size={20} /></View></View><View style={s.heroStamp}><Text style={s.stampTop}>KYOTO</Text><Text style={s.stampBig}>京都</Text><Text style={s.stampBottom}>20 — 24 NOV. 2026</Text></View></ImageBackground>
           </Pressable>
@@ -485,12 +515,16 @@ function Journal() {
       </>}
     </>}
     {sheet === 'join' && <>
-      {!sharingAvailable ? <Text style={s.body}>這個版本的共用服務尚未連接。</Text> : joinPreview ? <>
+      {!sharingAvailable ? <Text style={s.body}>這個版本的共用服務尚未連接。</Text> : !inviteToken ? <>
+        <Text style={s.label}>旅伴手帳邀請連結</Text>
+        <TextInput accessibilityLabel="旅伴手帳邀請連結" placeholder="貼上邀請連結" value={pastedInvite} onChangeText={value => { setPastedInvite(value); setError(''); }} keyboardType="url" autoCapitalize="none" autoCorrect={false} maxLength={2048} onSubmitEditing={previewPastedInvite} style={s.input} />
+        <Btn title="查看邀請" icon="arrow-forward" onPress={previewPastedInvite} disabled={!pastedInvite.trim()} />
+      </> : joinPreview ? <>
         <Text style={s.cardTitle}>{joinPreview.title}</Text>
         <Text style={s.body}>{joinPreview.destination}</Text>
         <Field label="你在這趟旅行的名字" value={memberDisplayName} onChangeText={setMemberDisplayName} placeholder="例如：小宇" />
         <Btn title="接受邀請" icon="person-add-outline" onPress={joinTrip} disabled={cloudBusy || !memberDisplayName.trim() || memberDisplayName.trim().length > 40} />
-      </> : !error && <View style={s.row}><ActivityIndicator color={C.green} /><Text style={s.body}>正在讀取邀請…</Text></View>}
+      </> : error ? <Btn title="使用另一個邀請連結" secondary onPress={resetJoin} /> : <View style={s.row}><ActivityIndicator color={C.green} /><Text style={s.body}>正在讀取邀請…</Text></View>}
     </>}
     {sheet === 'call' && <><View style={s.callCircle}><Icon name="headset-outline" color={C.green} size={48} /></View><Text style={[s.cardTitle, { textAlign: 'center' }]}>通話介面預覽</Text><Text style={[s.body, { textAlign: 'center' }]}>尚未連接 LiveKit，沒有使用麥克風，也沒有撥打給旅伴。</Text><View style={[s.row, { justifyContent: 'center', flexWrap: 'wrap' }]}>{trip?.members.map(m => <View key={m.id} style={{ alignItems: 'center', gap: 8 }}><Avatar name={m.name} color={m.color} size={50} /><Text style={s.micro}>{m.name}</Text><Text style={s.micro}>未連線</Text></View>)}</View><Btn title={muted ? '解除靜音（模擬）' : '靜音（模擬）'} icon={muted ? 'mic-off-outline' : 'mic-outline'} secondary onPress={() => setMuted(v => !v)} /><Btn title="結束介面預覽" icon="call-outline" onPress={() => setSheet(null)} /></>}
     {sheet === 'help' && <><Text style={s.cardTitle}>一趟旅行，一個共同空間。</Text><Text style={s.body}>{sharingAvailable ? '本機旅行保存在目前瀏覽器。共用旅行的行程、收藏與支出會同步給已接受邀請的旅伴。' : '旅行、行程、收藏、記帳與體驗訊息保存在目前瀏覽器。'}</Text><Text style={s.label}>體驗一趟完整的小旅行</Text><Text style={s.body}>開啟「京都慢慢走」→ 美食 → 收藏小麵屋 → 加入行程 → 點「記下這一餐的花費」→ 新增支出、選擇付款與分攤成員 → 查看結算 → 相簿點選照片。</Text><Text style={s.label}>後續開發清單</Text>{['帳號：Supabase Auth、登入復原、登出及刪除帳號。', '成員權限：擁有者、編輯者、檢視者；邀請到期、撤銷及 RLS。', '雲端儲存：Postgres 資料結構、照片私有儲存、縮圖、備份與刪除。', '共同編輯：版本號、衝突提示、樂觀更新、離線佇列與重試。', '記帳：各幣別最小單位、尾數規則、自訂分攤、匯率及核銷。', '分享：行程／照片／帳目獨立範圍，預設私人與可撤銷連結。', '即時語音：LiveKit token 服務、麥克風權限、斷線重連、背景音訊。', '雙平台：iOS／Android 真機、安全區域、鍵盤、大字體及弱網測試。'].map(t => <Text key={t} style={s.body}>• {t}</Text>)}<Text style={s.micro}>完整驗收條件與開發順序請見專案 docs/ROADMAP.md。</Text></>}

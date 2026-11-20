@@ -33,9 +33,11 @@ const scripts = [...index.matchAll(/<script[^>]+src="([^"]+)"/g)].map(match => m
 if (!scripts.length || scripts.some(src => !src.startsWith(`${basePath}/`))) {
   throw new Error(`Exported script URLs must start with ${basePath}/. Build with EXPO_BASE_PATH=${basePath}.`);
 }
+const releaseHash = createHash('sha256');
 for (const src of scripts) {
   const local = join(directory, src.slice(basePath.length + 1));
   const bytes = readFileSync(local);
+  releaseHash.update(bytes);
   // Use the final bytes for the cache key after normalizing exported asset paths.
   const digest = createHash('sha256').update(bytes).digest('hex').slice(0, 32);
   const name = `index-${digest}.js`;
@@ -43,6 +45,10 @@ for (const src of scripts) {
   if (resolve(local) !== resolve(target)) renameSync(local, target);
   index = index.replace(src, src.replace(/[^/]+$/, name));
 }
+const version = releaseHash.digest('hex').slice(0, 32);
+if (!index.includes('</head>')) throw new Error('Exported HTML is missing its head element.');
+index = index.replace('</head>', `<meta name="kelly-version" content="${version}"><link rel="kelly-release" href="${basePath}/release.json"></head>`);
+writeFileSync(join(directory, 'release.json'), JSON.stringify({ version }));
 writeFileSync(join(directory, 'index.html'), index);
 writeFileSync(join(directory, '.nojekyll'), '');
 copyFileSync(join(directory, 'index.html'), join(directory, '404.html'));

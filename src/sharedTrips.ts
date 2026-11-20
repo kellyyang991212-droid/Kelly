@@ -96,6 +96,16 @@ export function readInviteToken() {
   return Platform.OS === 'web' && typeof window !== 'undefined' ? invitePattern.exec(window.location.hash)?.[1] ?? null : null;
 }
 
+export function tokenFromInviteLink(link: string) {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return null;
+  try {
+    const url = new URL(link.trim());
+    const appPath = (path: string) => path.replace(/(?:\/index\.html|\/)$/, '');
+    if (url.origin !== window.location.origin || appPath(url.pathname) !== appPath(window.location.pathname)) return null;
+    return invitePattern.exec(url.hash)?.[1] ?? null;
+  } catch { return null; }
+}
+
 export function inviteLink(token: string) {
   const url = new URL(window.location.href);
   url.hash = `invite=${token}`;
