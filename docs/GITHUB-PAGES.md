@@ -39,7 +39,7 @@ Remove-Item Env:EXPO_BASE_PATH
 
 1. 建立 Supabase 專案，在 Authentication 的登入方式啟用 **Anonymous Sign-ins**。
 2. 在 SQL Editor 執行 [共用旅行 migration](../supabase/migrations/20261120000000_shared_trips.sql)。
-3. 在 GitHub 儲存庫 Settings → Secrets and variables → Actions → Variables 設定 `EXPO_PUBLIC_SUPABASE_URL`（Project URL）與 `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`（以 `sb_publishable_` 開頭）。這兩個值會進入公開 Web bundle。具管理權限的金鑰需留在伺服器端。
+3. 在 GitHub 儲存庫 Settings → Secrets and variables → Actions → Variables 設定 `EXPO_PUBLIC_SUPABASE_URL`（Project URL）。使用新金鑰時設定 `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`（以 `sb_publishable_` 開頭）；使用 Legacy API keys 時設定 `EXPO_PUBLIC_SUPABASE_ANON_KEY`（公開 `anon` 金鑰）。公開金鑰與 URL 會進入 Web bundle。具管理權限的金鑰需留在伺服器端。
 4. 重新執行 GitHub Pages 工作流程。本機開發可將同樣的兩個值放入 `.env`，再重新啟動 Expo。
 5. 用兩個瀏覽器工作階段驗證：建立自己的旅行 → 邀請旅伴 → 產生邀請連結，讓另一個瀏覽器開啟並接受。雙方應看到同一份行程、收藏和支出。用第三個瀏覽器打開同一連結，確認已使用的邀請無法加入。
 

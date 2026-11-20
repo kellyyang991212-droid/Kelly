@@ -6,8 +6,29 @@ export type SharedTrip = { trip: Trip; version: number; memberId: string; owner:
 export type InvitePreview = { title: string; destination: string };
 
 const url = process.env.EXPO_PUBLIC_SUPABASE_URL?.trim();
-const key = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
-const client = Platform.OS === 'web' && url && /^https?:\/\/[^\s/]+\/?$/.test(url) && key?.startsWith('sb_publishable_') ? createClient(url, key) : null;
+const publishableKey = process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
+const legacyKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY?.trim();
+
+function hasAnonRole(key: string, host: string) {
+  const payload = key.split('.')[1];
+  if (!payload) return false;
+  try {
+    const claims = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return claims.iss === 'supabase' && claims.role === 'anon' && host === `${claims.ref}.supabase.co`;
+  } catch { return false; }
+}
+
+function configuredClient() {
+  if (Platform.OS !== 'web' || !url) return null;
+  try {
+    const endpoint = new URL(url);
+    const key = publishableKey?.startsWith('sb_publishable_') ? publishableKey
+      : legacyKey && hasAnonRole(legacyKey, endpoint.hostname) ? legacyKey : null;
+    return key ? createClient(endpoint.origin, key) : null;
+  } catch { return null; }
+}
+
+const client = configuredClient();
 export const sharingAvailable = !!client;
 
 let startingSession: Promise<void> | undefined;
