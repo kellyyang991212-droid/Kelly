@@ -8,7 +8,7 @@ import { addPlaceToTrip, balances, googleMapsUrl, makeDemo, parseGoogleMapsLink,
 import type { Event, Place, Trip } from './src/domain';
 import MapPlaceSearch from './src/MapPlaceSearch';
 import type { MapPlaceDraft } from './src/MapPlaceSearch';
-import { acceptInvite, clearInviteLink, createInvite, getSharedTrip, inviteLink, listSharedTrips, previewInvite, publishTrip, readInviteToken, revokeInvite, saveSharedTrip, sharingAvailable } from './src/sharedTrips';
+import { acceptInvite, clearInviteLink, createInvite, getSharedTrip, inviteLink, listSharedTrips, previewInvite, publishTrip, readInviteToken, revokeInvite, saveSharedTrip, sendSharedMessage, sharingAvailable } from './src/sharedTrips';
 import type { InvitePreview, SharedTrip } from './src/sharedTrips';
 
 const C = { ink: '#263D35', green: '#32644D', muted: '#7C867B', cream: '#F6F6F0', line: '#E6E8DF', soft: '#EAF0E4', orange: '#BF704D' };
@@ -55,6 +55,7 @@ function Journal() {
   const [tripFilter, setTripFilter] = useState('全部旅行');
   const [search, setSearch] = useState('');
   const [message, setMessage] = useState('');
+  const [chatError, setChatError] = useState('');
   const [title, setTitle] = useState('');
   const [destination, setDestination] = useState('');
   const [start, setStart] = useState('2026-12-01');
@@ -76,6 +77,9 @@ function Journal() {
   const [cloudBusy, setCloudBusy] = useState(false);
   const [muted, setMuted] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+  const chatHistory = useRef<ScrollView>(null);
+  const followChat = useRef(true);
+  const unsentMessage = useRef<{ tripId: string; id: string; text: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cloudPending = useRef(false);
   const shared = sharedTrips.find(record => record.trip.id === activeId);
@@ -166,13 +170,14 @@ function Journal() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
   const notify = (text: string) => { setToast(text); if (toastTimer.current) clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4200); };
-  async function runCloud(operation: () => Promise<void>) {
+  async function runCloud(operation: () => Promise<void>, onError?: (message: string) => void) {
     if (cloudPending.current) return false;
     cloudPending.current = true;
     setCloudBusy(true);
     try { await operation(); return true; }
     catch (cause) {
       const message = cause instanceof Error ? cause.message : '';
+      if (onError) { onError(message); return false; }
       const feedback = message === 'invalid_invite' ? '邀請已使用、過期或撤回。' : message === 'trip_full' ? '這趟旅行的旅伴人數已達上限。' : message === 'invalid_trip' ? '旅行資料超出限制或格式有誤。' : message === 'concurrent_update' ? '旅伴正在同時更新，請確認最新資料後再試。' : '暫時無法儲存共用旅行，請確認網路後再試。';
       if (sheet) setError(feedback);
       else notify(feedback);
@@ -198,8 +203,15 @@ function Journal() {
       throw new Error('concurrent_update');
     });
   }
-  const openTrip = (id: string) => { setActiveId(id); setTab('行程'); setDay(0); setFoodFilter('全部'); setSearch(''); scrollRef.current?.scrollTo({ y: 0 }); };
-  const changeTab = (value: Tab) => { setTab(value); scrollRef.current?.scrollTo({ y: 0, animated: false }); };
+  const openTrip = (id: string) => {
+    unsentMessage.current = null;
+    setMessage(''); setChatError('');
+    setActiveId(id); setTab('行程'); setDay(0); setFoodFilter('全部'); setSearch(''); scrollRef.current?.scrollTo({ y: 0 });
+  };
+  const changeTab = (value: Tab) => {
+    if (value === '聊天') followChat.current = true;
+    setTab(value); scrollRef.current?.scrollTo({ y: 0, animated: false });
+  };
   const open = (value: Sheet, place?: Place) => {
     setChosenLocation(null); setPlaceLinkInvalid(false);
     setError(''); setTitle(value === 'expense' && place ? place.name : ''); setNote(''); setAmount(''); setTime('12:00'); setFormDay(day); setPayer(memberId); setParticipants(trip?.members.map(m => m.id) ?? [memberId]); setSelectedPlace(place ?? null); setSheet(value);
@@ -293,10 +305,27 @@ function Journal() {
       setSheet(null); setTab('記帳'); notify('已新增支出並計算分攤・沒有實際轉帳');
     }
   }
-  function sendMessage() {
-    if (!message.trim() || !trip || shared) return;
+  async function sendMessage() {
+    if (!message.trim() || !trip || cloudPending.current) return;
     const text = message.trim();
-    void update(t => ({ ...t, messages: [...t.messages, { id: uid(), sender: 'me', text, time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false }) }] }));
+    followChat.current = true;
+    if (shared) {
+      setChatError('');
+      const existing = unsentMessage.current;
+      const draft = existing?.tripId === trip.id && existing.text === text ? existing : { tripId: trip.id, id: uid(), text };
+      unsentMessage.current = draft;
+      const sent = await runCloud(async () => {
+        installShared(await sendSharedMessage(draft.tripId, draft.id, draft.text));
+      }, error => {
+        if (unsentMessage.current === draft) setChatError(error === 'membership_required' ? '這個瀏覽器已無法在此旅行傳送訊息。' : '訊息傳送失敗，請再試一次。');
+      });
+      if (sent && unsentMessage.current === draft) {
+        unsentMessage.current = null;
+        setMessage('');
+      }
+      return;
+    }
+    void update(t => ({ ...t, messages: [...t.messages, { id: uid(), sender: memberId, text, time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false }) }] }));
     setMessage(''); notify('訊息已儲存在本機，尚未傳送給旅伴');
   }
   const memberName = (id: string) => trip?.members.find(m => m.id === id)?.name.replace('（我）', '') ?? id;
@@ -340,7 +369,7 @@ function Journal() {
           <View style={s.footer}><Icon name="leaf-outline" color={C.muted} size={15} /><Text style={s.micro}>一起計畫，一起出發，一起記得。</Text></View>
         </> : <>
           <View style={[s.tripHeader, !desktop && { flexDirection: 'column', alignItems: 'stretch' }]}><View style={{ flex: 1, gap: 9 }}><Text style={s.eyebrow}>OUR LITTLE ADVENTURE</Text><Text style={[s.h1, !desktop && { fontSize: 30 }]}>{trip.title}<Text style={s.titleDot}> 。</Text></Text><View style={[s.row, { flexWrap: 'wrap' }]}><Icon name="location-outline" size={16} color={C.muted} /><Text style={s.micro}>{trip.destination}</Text><Text style={s.micro}>│</Text><Icon name="calendar-outline" size={16} color={C.muted} /><Text style={s.micro}>{trip.start.replaceAll('-', '.')} — {shortDate(trip.end)}・{days.length} 天</Text></View></View><View style={{ gap: 13, alignItems: desktop ? 'flex-end' : 'flex-start' }}><View style={s.row}><View style={[s.row, { gap: 0 }]}>{trip.members.map(m => <View key={m.id} style={{ marginLeft: -5 }}><Avatar name={m.name} color={m.color} /></View>)}</View><Text style={s.micro}>{trip.members.length} 位旅伴{trip.demo ? '・示範成員' : ''}</Text></View><View style={s.row}><Btn small title="語音" icon="headset-outline" secondary onPress={() => open('call')} /><Btn small title={shared && !shared.owner ? "旅伴" : "邀請旅伴"} icon="person-add-outline" secondary onPress={() => open('share')} /></View></View></View>
-          <View style={s.notice}><Icon name="information-circle-outline" size={17} color={C.green} /><Text style={[s.micro, { color: C.green, flex: 1 }]}>{trip.demo ? '示範旅行與示意照片・操作僅存在這個瀏覽器。' : shared ? '共用旅行・行程、美食收藏和支出會與旅伴同步。' : '本機旅行・資料存在這個瀏覽器。'}</Text></View>
+          <View style={s.notice}><Icon name="information-circle-outline" size={17} color={C.green} /><Text style={[s.micro, { color: C.green, flex: 1 }]}>{trip.demo ? '示範旅行與示意照片・操作僅存在這個瀏覽器。' : shared ? '共用旅行・行程、美食收藏、支出和聊天會與旅伴同步。' : '本機旅行・資料存在這個瀏覽器。'}</Text></View>
           {desktop && <View style={s.desktopTabs}>{tabs.map(t => <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === t.name }} key={t.name} onPress={() => changeTab(t.name)} style={[s.desktopTab, tab === t.name && s.desktopTabActive]}><Icon name={t.icon} size={19} color={tab === t.name ? C.green : C.muted} /><Text style={[s.tabText, tab === t.name && { color: C.green }]}>{t.name}</Text>{t.name === '聊天' && <View style={s.tinyDot} />}</Pressable>)}<View style={{ flex: 1 }} /><Text style={s.micro}>一趟旅行，一起完成</Text></View>}
           <View style={[s.workspace, !wide && { flexDirection: 'column' }]}><View style={{ flex: 1, minWidth: 0 }}>
             {tab === '行程' && <>
@@ -376,11 +405,44 @@ function Journal() {
               <View style={s.photoGrid}>{photos.map((p, i) => <Pressable accessibilityRole="button" accessibilityLabel={`查看照片：${p.caption}`} onPress={() => setPhotoIndex(i)} key={i} style={[s.photoTile, { width: desktop ? '48%' : '47%' }]}><Photo uri={p.uri} style={{ width: '100%', aspectRatio: i % 3 === 0 ? .9 : 1 }} /><View style={{ padding: 13, gap: 6 }}><Text style={s.label}>{p.caption}</Text><Text style={s.micro}>{p.by}・{p.day}・示意</Text></View></Pressable>)}</View>
               {!photos.length && empty('旅途的第一張照片，會是什麼？', '正式版本將支援成員共同上傳、留言與相簿權限。', 'images-outline')}
             </>}
-            {tab === '聊天' && (shared ? empty('共用聊天尚未開放', '可先與旅伴一起編排行程和記帳。', 'chatbubbles-outline') : <>
-              {sectionHead('TRAVEL CHAT', '說走就走，也說說今天', '本機模擬聊天室・沒有傳送訊息或連線中的旅伴', <Btn small title="語音通話" icon="headset-outline" onPress={() => open('call')} />)}
-              <View style={s.chatPanel}><View style={s.chatDate}><Text style={s.micro}>這趟旅行的聊天紀錄・示範</Text></View>{trip.messages.map(m => { const person = trip.members.find(p => p.id === m.sender)!; const mine = m.sender === 'me'; return <View key={m.id} style={[s.chatRow, mine && { flexDirection: 'row-reverse' }]}><Avatar name={person.name} color={person.color} /><View style={{ maxWidth: '80%', gap: 7, alignItems: mine ? 'flex-end' : 'flex-start' }}><Text style={s.micro}>{person.name}</Text><View style={[s.bubble, mine && s.myBubble]}><Text style={[s.chatText, mine && { color: 'white' }]}>{m.text}</Text></View><Text style={s.chatTime}>{m.time}{mine ? '・僅本機' : '・示範訊息'}</Text></View></View>; })}{!trip.messages.length && empty('打個招呼，開始期待旅行', '此處僅保存本機訊息，尚未啟用多人聊天。', 'chatbubbles-outline')}</View>
-              <View style={s.composer}><TextInput accessibilityLabel="輸入旅行訊息" value={message} onChangeText={setMessage} placeholder="想和旅伴說些什麼？" placeholderTextColor={C.muted} style={s.composerInput} maxLength={1000} multiline /><Pressable accessibilityRole="button" accessibilityLabel="傳送本機模擬訊息" disabled={!message.trim()} onPress={sendMessage} style={[s.sendButton, !message.trim() && { opacity: .4 }]}><Icon name="arrow-up" color="white" /></Pressable></View>
-            </>)}
+            {tab === '聊天' && <>
+              {sectionHead('TRAVEL CHAT', '旅伴聊天', shared ? '同一趟旅行的旅伴都能看到訊息。' : '這趟旅行的訊息保存在這個瀏覽器。', <Btn small title="語音通話" icon="headset-outline" onPress={() => open('call')} />)}
+              <View style={s.chatPanel}>
+                {trip.messages.length > 0 ? <ScrollView
+                  ref={chatHistory}
+                  style={s.chatHistory}
+                  nestedScrollEnabled
+                  keyboardShouldPersistTaps="handled"
+                  scrollEventThrottle={50}
+                  onScroll={({ nativeEvent }) => {
+                    const { contentSize, contentOffset, layoutMeasurement } = nativeEvent;
+                    followChat.current = contentSize.height - contentOffset.y - layoutMeasurement.height < 48;
+                  }}
+                  onContentSizeChange={() => { if (followChat.current) chatHistory.current?.scrollToEnd({ animated: false }); }}
+                >
+                  {trip.messages.map(m => {
+                    const person = trip.members.find(member => member.id === m.sender);
+                    const name = person?.name ?? '旅伴';
+                    const mine = m.sender === memberId;
+                    return <View key={m.id} style={[s.chatRow, mine && { flexDirection: 'row-reverse' }]}>
+                      <Avatar name={name} color={person?.color ?? C.soft} />
+                      <View style={{ maxWidth: '80%', gap: 7, alignItems: mine ? 'flex-end' : 'flex-start' }}>
+                        <Text style={s.micro}>{mine ? '你' : name}</Text>
+                        <View style={[s.bubble, mine && s.myBubble]}><Text style={[s.chatText, mine && { color: 'white' }]}>{m.text}</Text></View>
+                        <Text style={s.chatTime}>{m.time}</Text>
+                      </View>
+                    </View>;
+                  })}
+                </ScrollView> : empty('還沒有訊息', '寫下第一則訊息吧。', 'chatbubbles-outline')}
+              </View>
+              {!!chatError && <Text accessibilityRole="alert" style={s.formError}>{chatError}</Text>}
+              <View style={s.composer}>
+                <TextInput accessibilityLabel="輸入旅行訊息" value={message} onChangeText={value => { setMessage(value); setChatError(''); }} editable={!cloudBusy} placeholder="輸入訊息" placeholderTextColor={C.muted} style={s.composerInput} maxLength={1000} multiline />
+                <Pressable accessibilityRole="button" accessibilityLabel={shared ? '傳送訊息' : '傳送本機模擬訊息'} disabled={!message.trim() || cloudBusy} onPress={sendMessage} style={[s.sendButton, (!message.trim() || cloudBusy) && { opacity: .4 }]}>
+                  {cloudBusy ? <ActivityIndicator color="white" size="small" /> : <Icon name="arrow-up" color="white" />}
+                </Pressable>
+              </View>
+            </>}
           </View>
           {wide && <View style={s.aside}><View style={s.asideCard}><Text style={s.eyebrow}>OUR TRAVEL NOTE</Text><Photo uri={trip.image} style={{ height: 165, borderRadius: 10, marginTop: 18, marginBottom: 18 }} /><Text style={s.asideTitle}>最好的風景，{ '\n' }是我們都在這裡。</Text><Text style={[s.body, { marginTop: 12 }]}>行程可以慢慢排，回憶可以一起存。這是屬於 {trip.members.length} 個人的旅行小宇宙。</Text><View style={s.cardDivider} /><View style={[s.between, { marginTop: 16 }]}><Text style={s.micro}>行程完成</Text><Text style={s.label}>{trip.events.filter(e => e.done).length} / {trip.events.length}</Text></View><View style={s.progress}><View style={{ height: 5, width: `${trip.events.length ? trip.events.filter(e => e.done).length / trip.events.length * 100 : 0}%`, backgroundColor: '#73956C', borderRadius: 3 }} /></View></View><View style={s.flowCard}><Icon name="sparkles-outline" color={C.orange} /><Text style={s.cardTitle}>試試一起規劃的感覺</Text><Text style={s.body}>① 收藏一間想吃的店{ '\n' }② 把它加入今天的行程{ '\n' }③ 記下餐費，讓大家分攤{ '\n' }④ 去相簿看看旅行的樣子</Text><Pressable accessibilityRole="button" onPress={() => changeTab('美食')} style={[s.row, { minHeight: 44 }]}><Text style={[s.label, { color: C.orange }]}>從美食口袋開始</Text><Icon name="arrow-forward" size={16} color={C.orange} /></Pressable></View><Text style={[s.micro, { textAlign: 'center', lineHeight: 20 }]}>原型 v0.1・本機資料{ '\n' }還沒有任何雲端服務連線</Text></View>}
           </View>
@@ -407,7 +469,7 @@ function Journal() {
       {trip.members.map(member => <View key={member.id} style={s.row}><Avatar name={member.name} color={member.color} /><Text style={s.label}>{member.name.replace('（我）', '')}{member.id === memberId ? '（你）' : ''}</Text></View>)}
       {trip.demo ? <Text style={s.body}>先建立自己的旅行，就能在該旅行邀請旅伴。</Text> : !sharingAvailable ? <Text style={s.body}>這個版本的共用服務尚未連接。</Text> : (!shared || shared.owner) && <>
         {!shared && <>
-          <Text style={s.body}>產生邀請後，加入的旅伴可以查看和修改行程與美食收藏，並查看及新增支出。這包括目前已有的行程、收藏和支出。</Text>
+          <Text style={s.body}>產生邀請後，加入的旅伴可以查看和修改行程與美食收藏，並查看及新增支出。這包括目前已有的行程、收藏和支出。加入後也能使用這趟旅行的文字聊天。</Text>
           <Field label="你在這趟旅行的名字" value={memberDisplayName} onChangeText={setMemberDisplayName} placeholder="例如：小安" />
         </>}
         <Text style={s.micro}>每個連結限一人使用，24 小時後到期。產生新連結會讓先前未使用的連結失效。</Text>
@@ -447,7 +509,7 @@ const s = StyleSheet.create({
   welcome: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 30, gap: 25 }, homeHero: { height: 335, overflow: 'hidden', borderRadius: 18 }, heroImage: { flex: 1 }, heroShade: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,30,24,0.38)', borderRadius: 18 }, heroContent: { flex: 1, padding: 35, alignItems: 'flex-start' }, whiteTag: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11, paddingVertical: 7, borderRadius: 5, backgroundColor: 'rgba(255,255,255,.16)', borderWidth: 1, borderColor: 'rgba(255,255,255,.3)' }, heroTagText: { color: 'white', fontSize: 10, letterSpacing: 1 }, heroOverline: { color: '#EDF0E4', fontSize: 10, letterSpacing: 3.3, marginBottom: 12 }, heroTitle: { color: 'white', fontSize: 43, letterSpacing: 4, fontWeight: '600' }, heroSubtitle: { color: '#F4F0E7', fontSize: 13, marginTop: 12, letterSpacing: 1 }, heroLink: { color: 'white', fontSize: 12, fontWeight: '600', letterSpacing: 1 }, heroStamp: { position: 'absolute', right: 35, top: 35, padding: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,.65)', borderRadius: 60, width: 103, height: 103, alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '12deg' }] }, stampTop: { color: 'white', letterSpacing: 3, fontSize: 10 }, stampBig: { color: 'white', fontSize: 24, marginVertical: 7, letterSpacing: 4 }, stampBottom: { color: 'white', fontSize: 6, letterSpacing: 1 }, overviewRow: { flexDirection: 'row', marginTop: 22, borderWidth: 1, borderColor: C.line, borderRadius: 11, backgroundColor: '#FCFCF8', overflow: 'hidden', flexWrap: 'wrap' }, overview: { flex: 1, minWidth: 100, padding: 20, flexDirection: 'row', alignItems: 'center', gap: 14 }, overviewNumber: { fontSize: 22, color: C.ink, fontWeight: '500' }, overviewLabel: { fontSize: 11, color: C.muted, fontWeight: '400' }, sectionHead: { flexDirection: 'row', gap: 12, justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }, roundCount: { color: C.green, fontSize: 11, backgroundColor: '#E6EBDD', paddingVertical: 4, paddingHorizontal: 8, borderRadius: 6 }, filterRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 14, marginBottom: 23 }, search: { flexDirection: 'row', alignItems: 'center', gap: 9, borderBottomWidth: 1, borderColor: '#D7DCCD', minHeight: 42, paddingHorizontal: 5 }, searchInput: { fontSize: 12, color: C.ink, minWidth: 170, flex: 1, height: 42, outlineWidth: 0 } as any, tripGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 22 }, tripCard: { flex: 1, backgroundColor: '#FCFCF9', borderWidth: 1, borderColor: C.line, borderRadius: 15, overflow: 'hidden' }, cardImageTag: { position: 'absolute', left: 14, top: 14, backgroundColor: '#FAFBF3', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 5 }, cardImageTagText: { color: C.green, fontSize: 10, fontWeight: '600' }, tripDaysBadge: { position: 'absolute', bottom: 14, right: 14, backgroundColor: 'rgba(30,45,35,.55)', paddingHorizontal: 9, paddingVertical: 5, borderRadius: 5 }, tripDaysText: { color: 'white', fontSize: 10 }, cardDivider: { height: 1, backgroundColor: C.line, marginTop: 5 }, newTripCard: { flex: 1, minHeight: 330, borderWidth: 1, borderStyle: 'dashed', borderColor: '#CCD5C1', backgroundColor: '#F0F2E9', borderRadius: 15, padding: 24, alignItems: 'center', justifyContent: 'center', gap: 13 }, newTripCircle: { height: 51, width: 51, borderRadius: 26, alignItems: 'center', justifyContent: 'center', backgroundColor: '#E1E8D8', marginBottom: 6 }, footer: { marginTop: 35, flexDirection: 'row', justifyContent: 'center', gap: 8, paddingVertical: 8 },
   tripHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 24, marginBottom: 24 }, titleDot: { color: '#90A67F' }, notice: { backgroundColor: '#EDF1E6', borderWidth: 1, borderColor: '#E1E7D9', borderRadius: 8, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 24 }, desktopTabs: { flexDirection: 'row', alignItems: 'center', gap: 15, borderBottomWidth: 1, borderColor: '#DDE2D5', marginBottom: 33 }, desktopTab: { flexDirection: 'row', alignItems: 'center', gap: 9, padding: 16, paddingTop: 6, borderBottomWidth: 2, borderColor: 'transparent' }, desktopTabActive: { borderColor: C.green }, tabText: { fontSize: 14, color: C.muted, fontWeight: '600' }, tinyDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: C.orange }, workspace: { flexDirection: 'row', gap: 30 }, aside: { width: 265, gap: 23 }, asideCard: { padding: 21, borderWidth: 1, borderColor: C.line, borderRadius: 13, backgroundColor: '#FBFCF5' }, asideTitle: { fontSize: 23, lineHeight: 36, color: C.green, letterSpacing: 2 }, progress: { backgroundColor: '#E4E9DC', height: 5, borderRadius: 3, marginTop: 13 }, flowCard: { backgroundColor: '#F1EDE2', padding: 21, borderRadius: 13, gap: 14 }, dayList: { gap: 10, paddingBottom: 4 }, day: { width: 89, borderRadius: 11, padding: 15, borderWidth: 1, borderColor: C.line, backgroundColor: '#FCFCF7', gap: 8, alignItems: 'center' }, dayActive: { backgroundColor: C.green, borderColor: C.green }, dayOver: { fontSize: 9, letterSpacing: 1.3, color: C.muted }, dayDate: { fontSize: 21, fontWeight: '500', color: C.ink }, timelineRow: { flexDirection: 'row', gap: 15 }, timeColumn: { width: 51, alignItems: 'center' }, time: { fontSize: 12, fontWeight: '600', color: C.ink, marginTop: 5 }, timelineDot: { width: 8, height: 8, borderRadius: 4, borderWidth: 1, borderColor: '#8B9E7F', backgroundColor: C.cream, marginTop: 13 }, timelineLine: { flex: 1, width: 1, backgroundColor: '#D9DFD0', marginTop: 5, marginBottom: 5 }, eventCard: { flex: 1, borderRadius: 12, padding: 20, backgroundColor: '#FEFEFA', borderWidth: 1, borderColor: C.line, marginBottom: 18, flexDirection: 'row', alignItems: 'center' }, eventTitle: { fontSize: 16, fontWeight: '600', color: C.ink, lineHeight: 24 }, eventCategory: { color: C.green, backgroundColor: '#EDF1E5', fontSize: 10, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4, alignSelf: 'flex-start' }, checkButton: { minHeight: 44, minWidth: 44, justifyContent: 'center', alignItems: 'flex-end', marginVertical: -10 }, inlineHint: { flexDirection: 'row', alignItems: 'center', gap: 11, padding: 17, backgroundColor: '#F2EDE1', borderRadius: 9, marginTop: 10, marginLeft: 0 }, empty: { borderWidth: 1, borderColor: C.line, borderStyle: 'dashed', padding: 28, borderRadius: 13, gap: 13, alignItems: 'center', marginVertical: 10 }, foodCard: { borderWidth: 1, borderColor: C.line, borderRadius: 14, overflow: 'hidden', backgroundColor: '#FEFEFA' }, foodImageLabel: { position: 'absolute', top: 16, left: 15, backgroundColor: 'rgba(30,45,35,.5)', padding: 7, borderRadius: 5 }, heartButton: { position: 'absolute', top: 13, right: 15, backgroundColor: '#FFFDF3', width: 44, height: 44, borderRadius: 23, justifyContent: 'center', alignItems: 'center' },
   walletSummary: { backgroundColor: C.green, borderRadius: 15, padding: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, walletLabel: { fontSize: 12, color: '#D7E2CD', lineHeight: 22 }, walletAmount: { fontSize: 37, color: '#FFFFF3', fontWeight: '600', marginVertical: 13, letterSpacing: 1 }, balanceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 }, balanceCard: { flex: 1, minWidth: 120, borderWidth: 1, borderColor: C.line, backgroundColor: '#FEFEF9', padding: 16, borderRadius: 11, gap: 9 }, balanceNumber: { fontSize: 21, fontWeight: '600', marginTop: 6 }, expenseRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 19, borderBottomWidth: 1, borderColor: C.line }, expenseIcon: { width: 40, height: 43, backgroundColor: '#E9EEE1', borderRadius: 10, justifyContent: 'center', alignItems: 'center' }, expenseAmount: { fontSize: 17, color: C.ink, fontWeight: '600' }, photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 15, justifyContent: 'space-between' }, photoTile: { borderWidth: 1, borderColor: C.line, borderRadius: 10, overflow: 'hidden', backgroundColor: '#FEFEF8' },
-  chatPanel: { minHeight: 300, backgroundColor: '#F0F2E9', borderWidth: 1, borderColor: C.line, padding: 19, borderRadius: 12 }, chatDate: { alignItems: 'center', marginVertical: 10, marginBottom: 25 }, chatRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 24 }, bubble: { backgroundColor: '#FEFEFA', padding: 14, borderRadius: 13, borderTopLeftRadius: 3 }, myBubble: { backgroundColor: C.green, borderTopRightRadius: 3, borderTopLeftRadius: 13 }, chatText: { fontSize: 14, color: C.ink, lineHeight: 23 }, chatTime: { fontSize: 9, color: C.muted }, composer: { flexDirection: 'row', borderWidth: 1, borderColor: C.line, backgroundColor: '#FEFEFA', padding: 9, borderRadius: 11, marginTop: 16, alignItems: 'flex-end', gap: 10 }, composerInput: { flex: 1, fontSize: 14, padding: 10, color: C.ink, maxHeight: 100, minHeight: 44 }, sendButton: { width: 44, height: 44, backgroundColor: C.green, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  chatPanel: { minHeight: 300, backgroundColor: '#F0F2E9', borderWidth: 1, borderColor: C.line, padding: 19, borderRadius: 12 }, chatHistory: { maxHeight: 380 }, chatRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 24 }, bubble: { backgroundColor: '#FEFEFA', padding: 14, borderRadius: 13, borderTopLeftRadius: 3 }, myBubble: { backgroundColor: C.green, borderTopRightRadius: 3, borderTopLeftRadius: 13 }, chatText: { fontSize: 14, color: C.ink, lineHeight: 23 }, chatTime: { fontSize: 9, color: C.muted }, composer: { flexDirection: 'row', borderWidth: 1, borderColor: C.line, backgroundColor: '#FEFEFA', padding: 9, borderRadius: 11, marginTop: 16, alignItems: 'flex-end', gap: 10 }, composerInput: { flex: 1, fontSize: 14, padding: 10, color: C.ink, maxHeight: 100, minHeight: 44 }, sendButton: { width: 44, height: 44, backgroundColor: C.green, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   bottomNav: { backgroundColor: '#FCFCF8', borderTopWidth: 1, borderColor: C.line }, bottomNavRow: { flexDirection: 'row' }, bottomTab: { flex: 1, minHeight: 70, alignItems: 'center', justifyContent: 'center', gap: 5 }, bottomTabLabel: { fontSize: 11, color: C.muted }, bottomIndicator: { position: 'absolute', top: 0, width: 26, height: 3, borderRadius: 3, backgroundColor: C.green }, toast: { position: 'absolute', alignSelf: 'center', maxWidth: '90%', padding: 15, borderRadius: 12, backgroundColor: '#294738', flexDirection: 'row', gap: 10, alignItems: 'center', zIndex: 10, elevation: 10 }, toastText: { color: 'white', fontSize: 12, flexShrink: 1, lineHeight: 20 }, storageError: { padding: 10, color: '#9D5039', backgroundColor: '#FAE8DA', fontSize: 12 },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(18,34,25,.46)', alignItems: 'center', justifyContent: 'flex-end' }, modal: { width: '100%', maxWidth: 550, maxHeight: '88%', backgroundColor: '#FCFCF7', borderRadius: 18, marginBottom: 30, overflow: 'hidden' }, modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingBottom: 12, borderBottomWidth: 1, borderColor: C.line }, modalTitle: { color: C.ink, fontSize: 20, fontWeight: '600', flex: 1 }, modalBody: { padding: 24, gap: 20, paddingBottom: 30 }, modalActions: { padding: 20, borderTopWidth: 1, borderColor: C.line, paddingBottom: 28 }, input: { minHeight: 49, borderWidth: 1, borderColor: '#D8DFCF', borderRadius: 8, backgroundColor: '#FFFFFC', padding: 13, color: C.ink, fontSize: 15 }, formError: { color: '#A14F36', fontSize: 13, lineHeight: 22, backgroundColor: '#F9E8DC', padding: 12, borderRadius: 8 }, splitPreview: { backgroundColor: C.soft, padding: 17, borderRadius: 10, gap: 11 }, settlementRow: { flexDirection: 'row', gap: 12, justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: C.line, padding: 16, borderRadius: 9, minHeight: 55 }, callCircle: { width: 100, height: 100, borderRadius: 50, backgroundColor: C.soft, alignSelf: 'center', alignItems: 'center', justifyContent: 'center', marginVertical: 10 }, lightbox: { flex: 1, backgroundColor: '#15271F' }, lightboxCaption: { color: 'white', textAlign: 'center', padding: 20, fontSize: 17 },
 });

@@ -16,15 +16,21 @@ async function verifySharedBackend() {
 
   // The anonymous API role must see the deployed endpoint but lack permission to call it.
   // This checks the migration without creating any live users, invitations, or trips.
-  const rpc = await fetch(`${endpoint}/rest/v1/rpc/journal_list_trips`, {
-    method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: '{}', signal: AbortSignal.timeout(15000),
-  });
-  const result = await rpc.json();
-  if (rpc.ok || result.code !== '42501') {
-    const code = typeof result.code === 'string' && /^[A-Z0-9]+$/.test(result.code) ? `, ${result.code}` : '';
-    throw new Error(`Expected permission denied for the shared-trip RPC as an unauthenticated caller (HTTP ${rpc.status}${code}). Check the shared-trip migration.`);
+  const endpoints = {
+    journal_list_trips: {},
+    journal_send_message: { p_id: 'release-check', p_message_id: 'release-check', p_text: 'Release check' },
+  };
+  for (const [name, args] of Object.entries(endpoints)) {
+    const rpc = await fetch(`${endpoint}/rest/v1/rpc/${name}`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(args), signal: AbortSignal.timeout(15000),
+    });
+    const result = await rpc.json();
+    if (rpc.ok || result.code !== '42501') {
+      const code = typeof result.code === 'string' && /^[A-Z0-9]+$/.test(result.code) ? `, ${result.code}` : '';
+      throw new Error(`Expected permission denied for ${name} as an unauthenticated caller (HTTP ${rpc.status}${code}). Check the Supabase migrations.`);
+    }
   }
-  console.log('Supabase anonymous sign-ins are enabled and the shared-trip RPC requires authentication.');
+  console.log('Supabase anonymous sign-ins are enabled and shared trips and chat require authentication.');
 }
 
 verifySharedBackend().catch(error => {

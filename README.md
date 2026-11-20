@@ -54,7 +54,7 @@ pnpm ios
 
 畫面明示「示範模式」；初始旅伴、餐廳及既有訊息均為虛構。旅行時間為示範排程。照片來自 Unsplash，僅用作示意。照片需要網路，失敗時顯示替代提示。
 
-Web 版接上 Supabase 後，可在自己建立的旅行按「邀請旅伴」，分享一次性邀請，讓成員共同排行程、收藏和記帳。共同聊天、照片上傳、語音及轉帳屬後續功能。部署說明見 [GitHub Pages](docs/GITHUB-PAGES.md)。
+Web 版接上 Supabase 後，可在自己建立的旅行按「邀請旅伴」，分享一次性邀請，讓成員共同排行程、收藏、記帳和傳送文字訊息。照片上傳、語音及轉帳屬後續功能。部署說明見 [GitHub Pages](docs/GITHUB-PAGES.md)。
 
 本機旅行使用 `@travel-journal/prototype-v1`，原生端存於 AsyncStorage、Web 存於瀏覽器。啟用邀請時，只有指定旅行的行程、收藏和支出上傳，原始本機資料保留。共用身分跟隨目前瀏覽器的 Supabase 工作階段。
 

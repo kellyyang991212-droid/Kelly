@@ -87,6 +87,10 @@ export function saveSharedTrip(record: SharedTrip, next: Trip): Promise<SharedTr
   return rpc('journal_save_trip', { p_id: record.trip.id, p_version: record.version, p_contents: { events, places, expenses } });
 }
 
+export function sendSharedMessage(tripId: string, messageId: string, text: string): Promise<SharedTrip> {
+  return rpc('journal_send_message', { p_id: tripId, p_message_id: messageId, p_text: text });
+}
+
 const invitePattern = /^#invite=([0-9a-f]{64})$/;
 export function readInviteToken() {
   return Platform.OS === 'web' && typeof window !== 'undefined' ? invitePattern.exec(window.location.hash)?.[1] ?? null : null;
