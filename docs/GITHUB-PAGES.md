@@ -33,6 +33,16 @@ Remove-Item Env:EXPO_BASE_PATH
 
 網站公開的是程式與內建示範資料；開發機的 AsyncStorage、瀏覽器個人紀錄、`.env`、`node_modules` 與 Git 憑證不在部署產物內。
 
-每台裝置與每個瀏覽器仍各自保存本機資料。此 GitHub Pages 網址與先前 `localhost` 的儲存空間不同，第一次開啟會從示範旅行開始。登入、邀請朋友、共同編輯、即時群聊與語音仍待 Supabase／LiveKit 串接。Google Maps 搜尋採免金鑰外開流程。
+每台裝置與每個瀏覽器各自保存未上傳的本機旅行。GitHub Pages 與本機開發的儲存空間分開。即時群聊與語音屬後續功能。
+
+## 啟用 Web 版共用旅行
+
+1. 建立 Supabase 專案，在 Authentication 的登入方式啟用 **Anonymous Sign-ins**。
+2. 在 SQL Editor 執行 [共用旅行 migration](../supabase/migrations/20261120000000_shared_trips.sql)。
+3. 在 GitHub 儲存庫 Settings → Secrets and variables → Actions → Variables 設定 `EXPO_PUBLIC_SUPABASE_URL`（Project URL）與 `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`（以 `sb_publishable_` 開頭）。這兩個值會進入公開 Web bundle。具管理權限的金鑰需留在伺服器端。
+4. 重新執行 GitHub Pages 工作流程。本機開發可將同樣的兩個值放入 `.env`，再重新啟動 Expo。
+5. 用兩個瀏覽器工作階段驗證：建立自己的旅行 → 邀請旅伴 → 產生邀請連結，讓另一個瀏覽器開啟並接受。雙方應看到同一份行程、收藏和支出。用第三個瀏覽器打開同一連結，確認已使用的邀請無法加入。
+
+邀請 24 小時有效，每個連結限一個新成員加入。建立者可以撤回未使用的邀請。加入的旅伴可以讀取既有行程、收藏與支出。行程、收藏和新增支出會在開啟旅行時同步。共用身分以瀏覽器保存的匿名工作階段識別，清除網站資料後須重新邀請，且原建立者身分需保留原工作階段。
 
 參考：[Expo 網頁部署](https://docs.expo.dev/guides/publishing-websites)、[GitHub Pages 自訂工作流程](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)。

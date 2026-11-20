@@ -8,11 +8,13 @@ import { addPlaceToTrip, balances, googleMapsUrl, makeDemo, parseGoogleMapsLink,
 import type { Event, Place, Trip } from './src/domain';
 import MapPlaceSearch from './src/MapPlaceSearch';
 import type { MapPlaceDraft } from './src/MapPlaceSearch';
+import { acceptInvite, clearInviteLink, createInvite, getSharedTrip, inviteLink, listSharedTrips, previewInvite, publishTrip, readInviteToken, revokeInvite, saveSharedTrip, sharingAvailable } from './src/sharedTrips';
+import type { InvitePreview, SharedTrip } from './src/sharedTrips';
 
 const C = { ink: '#263D35', green: '#32644D', muted: '#7C867B', cream: '#F6F6F0', line: '#E6E8DF', soft: '#EAF0E4', orange: '#BF704D' };
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 type Tab = '行程' | '美食' | '記帳' | '相簿' | '聊天';
-type Sheet = 'create' | 'event' | 'expense' | 'place' | 'settle' | 'share' | 'call' | 'help' | 'foodSearch' | null;
+type Sheet = 'create' | 'event' | 'expense' | 'place' | 'settle' | 'share' | 'join' | 'call' | 'help' | 'foodSearch' | null;
 const tabs: { name: Tab; icon: IconName }[] = [{ name: '行程', icon: 'map-outline' }, { name: '美食', icon: 'restaurant-outline' }, { name: '記帳', icon: 'wallet-outline' }, { name: '相簿', icon: 'images-outline' }, { name: '聊天', icon: 'chatbubbles-outline' }];
 const money = (n: number) => `¥ ${n.toLocaleString('en-US')}`;
 const shortDate = (date: string) => `${Number(date.slice(5, 7))}/${Number(date.slice(8))}`;
@@ -38,13 +40,15 @@ function Journal() {
   const { width } = useWindowDimensions();
   const desktop = width >= 1000;
   const wide = width >= 1280;
-  const [trips, setTrips] = useState<Trip[]>([makeDemo()]);
+  const [localTrips, setLocalTrips] = useState<Trip[]>([makeDemo()]);
+  const [sharedTrips, setSharedTrips] = useState<SharedTrip[]>([]);
   const [ready, setReady] = useState(false);
   const [storageError, setStorageError] = useState('');
   const [activeId, setActiveId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('行程');
   const [day, setDay] = useState(0);
-  const [sheet, setSheet] = useState<Sheet>(null);
+  const [inviteToken, setInviteToken] = useState(readInviteToken);
+  const [sheet, setSheet] = useState<Sheet>(inviteToken ? 'join' : null);
   const [toast, setToast] = useState('');
   const [photoIndex, setPhotoIndex] = useState<number | null>(null);
   const [foodFilter, setFoodFilter] = useState('全部');
@@ -65,11 +69,20 @@ function Journal() {
   const [selectedPlace, setSelectedPlace] = useState<Place | null>(null);
   const [formDay, setFormDay] = useState(0);
   const [error, setError] = useState('');
-  const [shareScope, setShareScope] = useState('僅限旅伴');
+  const [memberDisplayName, setMemberDisplayName] = useState('');
+  const [joinPreview, setJoinPreview] = useState<InvitePreview | null>(null);
+  const [inviteUrl, setInviteUrl] = useState('');
+  const [cloudError, setCloudError] = useState('');
+  const [cloudBusy, setCloudBusy] = useState(false);
   const [muted, setMuted] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cloudPending = useRef(false);
+  const shared = sharedTrips.find(record => record.trip.id === activeId);
+  const sharedIds = new Set(sharedTrips.map(record => record.trip.id));
+  const trips = [...sharedTrips.map(record => record.trip), ...localTrips.filter(local => !sharedIds.has(local.id))];
   const trip = trips.find(t => t.id === activeId);
+  const memberId = shared?.memberId ?? 'me';
   const days = trip ? tripDays(trip) : [];
   const photos = trip?.demo ? [
     { uri: PHOTO.kyoto, caption: '清水寺的秋日風景', by: '阿琳', day: '11/20' },
@@ -80,18 +93,149 @@ function Journal() {
     { uri: PHOTO.street, caption: '再多走一段路吧', by: '小宇', day: '11/22' },
   ] : [];
   useEffect(() => {
-    AsyncStorage.getItem(STORAGE).then(raw => { if (raw) { const parsed = JSON.parse(raw); if (!Array.isArray(parsed) || !parsed.every(t => t.id && t.events && t.members && t.expenses && t.places && t.messages && validDates(t.start, t.end))) throw new Error(); setTrips(parsed); } }).catch(() => setStorageError('無法讀取本機紀錄，已載入示範資料。')).finally(() => setReady(true));
+    AsyncStorage.getItem(STORAGE).then(raw => { if (raw) { const parsed = JSON.parse(raw); if (!Array.isArray(parsed) || !parsed.every(t => t.id && t.events && t.members && t.expenses && t.places && t.messages && validDates(t.start, t.end))) throw new Error(); setLocalTrips(parsed); } }).catch(() => setStorageError('無法讀取本機紀錄，已載入示範資料。')).finally(() => setReady(true));
     return () => { if (toastTimer.current) clearTimeout(toastTimer.current); };
   }, []);
-  useEffect(() => { if (ready) AsyncStorage.setItem(STORAGE, JSON.stringify(trips)).catch(() => setStorageError('本機儲存失敗；目前的變更只保留到關閉畫面。')); }, [trips, ready]);
+  useEffect(() => { if (ready) AsyncStorage.setItem(STORAGE, JSON.stringify(localTrips)).catch(() => setStorageError('本機儲存失敗；目前的變更只保留到關閉畫面。')); }, [localTrips, ready]);
+
+  function installShared(record: SharedTrip) {
+    setSharedTrips(prev => {
+      const current = prev.find(item => item.trip.id === record.trip.id);
+      return current && current.version >= record.version ? prev : [...prev.filter(item => item.trip.id !== record.trip.id), record];
+    });
+  }
+
+  useEffect(() => {
+    if (!sharingAvailable) return;
+    let active = true;
+    listSharedTrips().then(records => {
+      if (active) records.forEach(installShared);
+    }).catch(() => { if (active) setCloudError('目前無法讀取共用旅行，請確認網路後重新整理。'); });
+    return () => { active = false; };
+  }, []);
+
+  const cloudTripId = shared?.trip.id;
+  useEffect(() => {
+    if (!cloudTripId) return;
+    let active = true;
+    let requesting = false;
+    async function refresh() {
+      if (requesting || !cloudTripId) return;
+      requesting = true;
+      try {
+        const record = await getSharedTrip(cloudTripId);
+        if (!active) return;
+        if (record) { installShared(record); setCloudError(''); }
+        else {
+          setSharedTrips(prev => prev.filter(item => item.trip.id !== cloudTripId));
+          setActiveId(id => id === cloudTripId ? null : id);
+          setCloudError('這支瀏覽器已無法存取該共用旅行。');
+        }
+      } catch { if (active) setCloudError('暫時無法同步旅行，會自動重試。'); }
+      finally { requesting = false; }
+    }
+    const timer = setInterval(refresh, 5000);
+    void refresh();
+    return () => { active = false; clearInterval(timer); };
+  }, [cloudTripId]);
+
+  useEffect(() => {
+    if (!inviteToken || !sharingAvailable) return;
+    let active = true;
+    setJoinPreview(null);
+    previewInvite(inviteToken).then(preview => {
+      if (!active) return;
+      if (preview) setJoinPreview(preview);
+      else setError('邀請已使用、過期或撤回，請向發出邀請的人索取新連結。');
+    }).catch(() => { if (active) setError('目前無法讀取邀請，請確認網路後重新整理。'); });
+    return () => { active = false; };
+  }, [inviteToken]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const onHashChange = () => {
+      const token = readInviteToken();
+      if (!token) return;
+      setError('');
+      setJoinPreview(null);
+      setMemberDisplayName('');
+      setInviteToken(token);
+      setSheet('join');
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
   const notify = (text: string) => { setToast(text); if (toastTimer.current) clearTimeout(toastTimer.current); toastTimer.current = setTimeout(() => setToast(''), 4200); };
-  const update = (fn: (t: Trip) => Trip) => setTrips(prev => prev.map(t => t.id === activeId ? fn(t) : t));
+  async function runCloud(operation: () => Promise<void>) {
+    if (cloudPending.current) return false;
+    cloudPending.current = true;
+    setCloudBusy(true);
+    try { await operation(); return true; }
+    catch (cause) {
+      const message = cause instanceof Error ? cause.message : '';
+      const feedback = message === 'invalid_invite' ? '邀請已使用、過期或撤回。' : message === 'trip_full' ? '這趟旅行的旅伴人數已達上限。' : message === 'invalid_trip' ? '旅行資料超出限制或格式有誤。' : message === 'concurrent_update' ? '旅伴正在同時更新，請確認最新資料後再試。' : '暫時無法儲存共用旅行，請確認網路後再試。';
+      if (sheet) setError(feedback);
+      else notify(feedback);
+      return false;
+    } finally { cloudPending.current = false; setCloudBusy(false); }
+  }
+
+  async function update(fn: (t: Trip) => Trip) {
+    if (!shared) {
+      setLocalTrips(prev => prev.map(t => t.id === activeId ? fn(t) : t));
+      return true;
+    }
+    return runCloud(async () => {
+      let current = shared;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const saved = await saveSharedTrip(current, fn(current.trip));
+        if (saved) { installShared(saved); return; }
+        const fresh = await getSharedTrip(current.trip.id);
+        if (!fresh) break;
+        current = fresh;
+        installShared(fresh);
+      }
+      throw new Error('concurrent_update');
+    });
+  }
   const openTrip = (id: string) => { setActiveId(id); setTab('行程'); setDay(0); setFoodFilter('全部'); setSearch(''); scrollRef.current?.scrollTo({ y: 0 }); };
   const changeTab = (value: Tab) => { setTab(value); scrollRef.current?.scrollTo({ y: 0, animated: false }); };
   const open = (value: Sheet, place?: Place) => {
     setChosenLocation(null); setPlaceLinkInvalid(false);
-    setError(''); setTitle(value === 'expense' && place ? place.name : ''); setNote(''); setAmount(''); setTime('12:00'); setFormDay(day); setPayer('me'); setParticipants(trip?.members.map(m => m.id) ?? ['me']); setSelectedPlace(place ?? null); setSheet(value);
+    setError(''); setTitle(value === 'expense' && place ? place.name : ''); setNote(''); setAmount(''); setTime('12:00'); setFormDay(day); setPayer(memberId); setParticipants(trip?.members.map(m => m.id) ?? [memberId]); setSelectedPlace(place ?? null); setSheet(value);
+    if (value === 'share') { setMemberDisplayName(''); setInviteUrl(''); }
   };
+
+  function closeSheet() {
+    if (cloudPending.current) return;
+    if (sheet === 'join') { clearInviteLink(); setInviteToken(null); }
+    setSheet(null);
+  }
+
+  function inviteFriend() {
+    if (!trip || trip.demo || !sharingAvailable || (shared && !shared.owner)) return;
+    setError('');
+    setInviteUrl('');
+    void runCloud(async () => {
+      const record = shared ?? await publishTrip(trip, memberDisplayName.trim());
+      installShared(record);
+      setInviteUrl(inviteLink(await createInvite(record.trip.id)));
+    });
+  }
+
+  function joinTrip() {
+    if (!inviteToken || !joinPreview || !memberDisplayName.trim()) return;
+    setError('');
+    void runCloud(async () => {
+      const record = await acceptInvite(inviteToken, memberDisplayName.trim());
+      installShared(record);
+      clearInviteLink();
+      setInviteToken(null);
+      setSheet(null);
+      openTrip(record.trip.id);
+      notify('已加入這趟共用旅行');
+    });
+  }
   function chooseEventLocation(place: MapPlaceDraft | null) {
     if (place?.name) setTitle(current => !current.trim() || current === chosenLocation?.name ? place.name : current);
     setChosenLocation(place);
@@ -106,22 +250,21 @@ function Journal() {
       if (sheet) setError(text); else notify(text);
     }
   }
-  function submit() {
+  async function submit() {
     if (sheet === 'foodSearch') {
       if (!chosenLocation?.name.trim() || !trip || placeLinkInvalid) return setError('請填入想收藏的店家名稱，並確認分享連結有效。');
-      const duplicate = trip.places.find(p => p.source === 'manual' && (chosenLocation.mapUrl ? p.mapUrl === chosenLocation.mapUrl : p.name === chosenLocation.name && p.area === (chosenLocation.address || trip.destination)));
-      if (duplicate) {
-        update(t => ({ ...t, places: t.places.map(p => p.id === duplicate.id ? { ...p, saved: true } : p) }));
-        setSheet(null); setFoodFilter('已收藏'); notify('這間店已在美食口袋，已更新收藏狀態'); return;
-      }
-      update(t => ({ ...t, places: [...t.places, { id: uid(), name: chosenLocation.name, area: chosenLocation.address || trip.destination, category: '美食', price: '價格未提供', image: PHOTO.food, description: '餐點照片為示意，店家資訊請開啟 Google Maps 確認。', source: 'manual', mapUrl: chosenLocation.mapUrl, saved: true }] }));
-      setSheet(null); setFoodFilter('已收藏'); notify('已收藏到這趟旅行的美食口袋・本機保存'); return;
+      const place: Place = { id: uid(), name: chosenLocation.name, area: chosenLocation.address || trip.destination, category: '美食', price: '價格未提供', image: PHOTO.food, description: '餐點照片為示意，店家資訊請開啟 Google Maps 確認。', source: 'manual', mapUrl: chosenLocation.mapUrl, saved: true };
+      if (!await update(t => {
+        const duplicate = t.places.find(p => p.source === 'manual' && (place.mapUrl ? p.mapUrl === place.mapUrl : p.name === place.name && p.area === place.area));
+        return { ...t, places: duplicate ? t.places.map(p => p.id === duplicate.id ? { ...p, saved: true } : p) : [...t.places, place] };
+      })) return;
+      setSheet(null); setFoodFilter('已收藏'); notify('已收藏到這趟旅行的美食口袋'); return;
     }
     if (sheet === 'create') {
       if (!title.trim() || !destination.trim()) return setError('請填寫旅行名稱與目的地。');
       if (!validDates(start, end)) return setError('請輸入有效日期 YYYY-MM-DD，結束日不可早於開始日，最多 31 天。');
       const created: Trip = { id: uid(), title: title.trim(), destination: destination.trim(), start, end, image: PHOTO.street, members: [makeDemo().members[0]], events: [], places: [], expenses: [], messages: [], demo: false };
-      setTrips(prev => [...prev, created]); openTrip(created.id); setSheet(null); notify('已建立旅行・僅儲存在這台裝置'); return;
+      setLocalTrips(prev => [...prev, created]); openTrip(created.id); setSheet(null); notify('已建立旅行・目前保存在這個瀏覽器'); return;
     }
     if (!trip) return;
     if (sheet === 'event' || sheet === 'place') {
@@ -129,29 +272,31 @@ function Journal() {
       if (sheet === 'event' && !title.trim()) return setError('請填寫行程名稱。');
       if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) return setError('時間請輸入 24 小時制，例如 12:30。');
       if (sheet === 'place' && selectedPlace) {
-        update(t => addPlaceToTrip(t, selectedPlace, formDay, time));
+        if (!await update(t => addPlaceToTrip(t, selectedPlace, formDay, time))) return;
       } else {
         const mapQuery = chosenLocation
           ? `${chosenLocation.name || title.trim()} ${chosenLocation.address || trip.destination}`.trim()
           : `${trip.destination} ${title.trim()}`.trim();
         try { googleMapsUrl(mapQuery); } catch (cause) { return setError((cause as Error).message); }
-        update(t => ({ ...t, events: [...t.events, { id: uid(), title: title.trim(), time, day: formDay, note: note.trim(), mapQuery, mapUrl: chosenLocation?.mapUrl, category: '自訂', done: false }] }));
+        const event: Event = { id: uid(), title: title.trim(), time, day: formDay, note: note.trim(), mapQuery, mapUrl: chosenLocation?.mapUrl, category: '自訂', done: false };
+        if (!await update(t => ({ ...t, events: [...t.events, event] }))) return;
       }
-      setDay(formDay); setTab('行程'); setSheet(null); notify('已加入行程・本機示範');
+      setDay(formDay); setTab('行程'); setSheet(null); notify('已加入行程');
     }
     if (sheet === 'expense') {
       const value = Number(amount);
       if (!title.trim()) return setError('請填寫支出名稱。');
       if (!/^\d+$/.test(amount) || !Number.isSafeInteger(value) || value <= 0 || value > 99999999) return setError('金額請輸入 1～99,999,999 的整數日圓。');
       if (!participants.length) return setError('請至少選擇一位分攤成員。');
-      update(t => ({ ...t, expenses: [...t.expenses, { id: uid(), title: title.trim(), amount: value, payer, participants, day: formDay }] }));
+      const expense = { id: uid(), title: title.trim(), amount: value, payer, participants, day: formDay };
+      if (!await update(t => ({ ...t, expenses: [...t.expenses, expense] }))) return;
       setSheet(null); setTab('記帳'); notify('已新增支出並計算分攤・沒有實際轉帳');
     }
   }
   function sendMessage() {
-    if (!message.trim() || !trip) return;
+    if (!message.trim() || !trip || shared) return;
     const text = message.trim();
-    update(t => ({ ...t, messages: [...t.messages, { id: uid(), sender: 'me', text, time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false }) }] }));
+    void update(t => ({ ...t, messages: [...t.messages, { id: uid(), sender: 'me', text, time: new Date().toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false }) }] }));
     setMessage(''); notify('訊息已儲存在本機，尚未傳送給旅伴');
   }
   const memberName = (id: string) => trip?.members.find(m => m.id === id)?.name.replace('（我）', '') ?? id;
@@ -175,9 +320,10 @@ function Journal() {
     <View style={s.main}>
       <View style={[s.topbar, !desktop && { paddingHorizontal: 20, height: 65 }]}>
         {desktop ? <View style={s.row}><Text onPress={() => setActiveId(null)} style={s.breadcrumb}>我的旅行</Text>{trip && <><Icon name="chevron-forward" size={14} color={C.muted} /><Text style={s.breadcrumb}>{trip.title}</Text></>}</View> : <Pressable accessibilityRole="button" accessibilityLabel="返回旅行列表" onPress={() => setActiveId(null)} style={s.row}>{trip ? <Icon name="arrow-back" /> : <Icon name="leaf" color={C.green} />}<Text style={s.mobileBrand}>{trip ? '所有旅行' : '旅伴手帳'}</Text></Pressable>}
-        <View style={s.row}><View style={s.demoBadge}><View style={s.dot} /><Text style={s.demoText}>示範模式</Text></View><Pressable accessibilityRole="button" accessibilityLabel="原型說明" onPress={() => open('help')} style={s.iconButton}><Icon name="help-circle-outline" color={C.muted} size={23} /></Pressable></View>
+        <View style={s.row}><View style={s.demoBadge}><View style={s.dot} /><Text style={s.demoText}>{shared ? '共用旅行' : trip?.demo || !trip ? '示範模式' : '本機旅行'}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="原型說明" onPress={() => open('help')} style={s.iconButton}><Icon name="help-circle-outline" color={C.muted} size={23} /></Pressable></View>
       </View>
       {storageError ? <Text accessibilityRole="alert" style={s.storageError}>{storageError}</Text> : null}
+      {cloudError ? <Text accessibilityRole="alert" style={s.storageError}>{cloudError}</Text> : null}
       <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={[s.content, !desktop && { paddingHorizontal: 20, paddingTop: 24, paddingBottom: trip ? 28 : 90 }]} keyboardShouldPersistTaps="handled">
         {!trip ? <>
           <View style={[s.welcome, !desktop && { alignItems: 'flex-start', flexDirection: 'column', gap: 20 }]}><View style={{ gap: 10 }}><Text style={s.eyebrow}>LET’S MAKE MEMORIES</Text><Text style={[s.h1, !desktop && { fontSize: 28 }]}>下一站，和喜歡的人一起。</Text><Text style={s.body}>從一個小小的計畫，開始一趟值得記住的旅行。</Text></View><Btn title="建立旅行" icon="add" onPress={() => open('create')} /></View>
@@ -187,21 +333,21 @@ function Journal() {
           <View style={s.overviewRow}>{[{ n: String(trips.length).padStart(2, '0'), label: '本旅行手帳', icon: 'book-outline' }, { n: '04', label: '位示範旅伴', icon: 'people-outline' }, { n: '05', label: '天京都小旅行', icon: 'sunny-outline' }].map(i => <View key={i.label} style={[s.overview, !desktop && { padding: 14 }]}><Icon name={i.icon as IconName} size={21} color={C.green} /><View><Text style={s.overviewNumber}>{i.n}<Text style={s.overviewLabel}> {i.label}</Text></Text></View></View>)}</View>
           <View style={[s.sectionHead, { marginTop: 32 }]}><View style={s.row}><Text style={s.h2}>我的旅行</Text><Text style={s.roundCount}>{trips.length}</Text></View><Text style={s.micro}>每一趟，都是我們的故事</Text></View>
           <View style={[s.filterRow, !desktop && { flexDirection: 'column', alignItems: 'stretch' }]}><View style={s.row}>{['全部旅行', '示範旅行', '我的旅行'].map(x => <Chip key={x} active={tripFilter === x} onPress={() => setTripFilter(x)}>{x}</Chip>)}</View><View style={s.search}><Icon name="search-outline" size={18} color={C.muted} /><TextInput accessibilityLabel="搜尋旅行" value={search} onChangeText={setSearch} placeholder="搜尋旅行或目的地" placeholderTextColor={C.muted} style={s.searchInput} /></View></View>
-          <View style={[s.tripGrid, !desktop && { flexDirection: 'column' }]}>{visibleTrips.map(t => <Pressable accessibilityRole="button" accessibilityLabel={`進入${t.title}`} key={t.id} onPress={() => openTrip(t.id)} style={[s.tripCard, desktop && { maxWidth: 430, minWidth: 280 }]}><View><Photo uri={t.image} style={{ height: 185, borderTopLeftRadius: 15, borderTopRightRadius: 15 }} /><View style={s.cardImageTag}><Text style={s.cardImageTagText}>{t.demo ? '示範旅行' : '本機旅行'}</Text></View><View style={s.tripDaysBadge}><Text style={s.tripDaysText}>{tripDays(t).length} 天 {Math.max(0, tripDays(t).length - 1)} 夜</Text></View></View><View style={{ padding: 20, gap: 12 }}><View style={s.between}><Text style={s.cardTitle}>{t.title}</Text><Icon name="arrow-up-right-box-outline" size={20} color={C.green} /></View><View style={s.row}><Icon name="location-outline" size={15} color={C.muted} /><Text style={s.micro}>{t.destination}</Text></View><View style={s.cardDivider} /><View style={s.between}><Text style={s.micro}>{t.start.replaceAll('-', '.')} — {shortDate(t.end)}</Text><View style={[s.row, { gap: 0 }]}>{t.members.slice(0, 4).map(m => <View key={m.id} style={{ marginLeft: -6 }}><Avatar name={m.name} color={m.color} size={27} /></View>)}</View></View></View></Pressable>)}
+          <View style={[s.tripGrid, !desktop && { flexDirection: 'column' }]}>{visibleTrips.map(t => <Pressable accessibilityRole="button" accessibilityLabel={`進入${t.title}`} key={t.id} onPress={() => openTrip(t.id)} style={[s.tripCard, desktop && { maxWidth: 430, minWidth: 280 }]}><View><Photo uri={t.image} style={{ height: 185, borderTopLeftRadius: 15, borderTopRightRadius: 15 }} /><View style={s.cardImageTag}><Text style={s.cardImageTagText}>{t.demo ? '示範旅行' : sharedIds.has(t.id) ? '共用旅行' : '我的旅行'}</Text></View><View style={s.tripDaysBadge}><Text style={s.tripDaysText}>{tripDays(t).length} 天 {Math.max(0, tripDays(t).length - 1)} 夜</Text></View></View><View style={{ padding: 20, gap: 12 }}><View style={s.between}><Text style={s.cardTitle}>{t.title}</Text><Icon name="arrow-up-right-box-outline" size={20} color={C.green} /></View><View style={s.row}><Icon name="location-outline" size={15} color={C.muted} /><Text style={s.micro}>{t.destination}</Text></View><View style={s.cardDivider} /><View style={s.between}><Text style={s.micro}>{t.start.replaceAll('-', '.')} — {shortDate(t.end)}</Text><View style={[s.row, { gap: 0 }]}>{t.members.slice(0, 4).map(m => <View key={m.id} style={{ marginLeft: -6 }}><Avatar name={m.name} color={m.color} size={27} /></View>)}</View></View></View></Pressable>)}
             <Pressable accessibilityRole="button" accessibilityLabel="規劃一趟新旅行" onPress={() => open('create')} style={[s.newTripCard, desktop && { maxWidth: 430, minWidth: 280 }]}><View style={s.newTripCircle}><Icon name="add" color={C.green} size={28} /></View><Text style={s.cardTitle}>把下一個期待寫下來</Text><Text style={s.body}>一趟旅行，一個屬於你們的空間。</Text><Text style={[s.label, { color: C.green, marginTop: 8 }]}>規劃新旅行 →</Text></Pressable>
           </View>
           {visibleTrips.length === 0 && empty('還沒有符合的旅行', '試試其他關鍵字，或建立一趟新旅行。')}
           <View style={s.footer}><Icon name="leaf-outline" color={C.muted} size={15} /><Text style={s.micro}>一起計畫，一起出發，一起記得。</Text></View>
         </> : <>
-          <View style={[s.tripHeader, !desktop && { flexDirection: 'column', alignItems: 'stretch' }]}><View style={{ flex: 1, gap: 9 }}><Text style={s.eyebrow}>OUR LITTLE ADVENTURE</Text><Text style={[s.h1, !desktop && { fontSize: 30 }]}>{trip.title}<Text style={s.titleDot}> 。</Text></Text><View style={[s.row, { flexWrap: 'wrap' }]}><Icon name="location-outline" size={16} color={C.muted} /><Text style={s.micro}>{trip.destination}</Text><Text style={s.micro}>│</Text><Icon name="calendar-outline" size={16} color={C.muted} /><Text style={s.micro}>{trip.start.replaceAll('-', '.')} — {shortDate(trip.end)}・{days.length} 天</Text></View></View><View style={{ gap: 13, alignItems: desktop ? 'flex-end' : 'flex-start' }}><View style={s.row}><View style={[s.row, { gap: 0 }]}>{trip.members.map(m => <View key={m.id} style={{ marginLeft: -5 }}><Avatar name={m.name} color={m.color} /></View>)}</View><Text style={s.micro}>{trip.members.length} 位旅伴{trip.demo ? '・示範成員' : '・僅自己'}</Text></View><View style={s.row}><Btn small title="語音" icon="headset-outline" secondary onPress={() => open('call')} /><Btn small title="分享旅行" icon="share-outline" secondary onPress={() => open('share')} /></View></View></View>
-          <View style={s.notice}><Icon name="information-circle-outline" size={17} color={C.green} /><Text style={[s.micro, { color: C.green, flex: 1 }]}>{trip.demo ? '示範旅行與示意照片・所有操作僅存本機，尚未與旅伴同步。' : '本機原型・尚未登入、邀請成員或啟用雲端同步。'}</Text></View>
+          <View style={[s.tripHeader, !desktop && { flexDirection: 'column', alignItems: 'stretch' }]}><View style={{ flex: 1, gap: 9 }}><Text style={s.eyebrow}>OUR LITTLE ADVENTURE</Text><Text style={[s.h1, !desktop && { fontSize: 30 }]}>{trip.title}<Text style={s.titleDot}> 。</Text></Text><View style={[s.row, { flexWrap: 'wrap' }]}><Icon name="location-outline" size={16} color={C.muted} /><Text style={s.micro}>{trip.destination}</Text><Text style={s.micro}>│</Text><Icon name="calendar-outline" size={16} color={C.muted} /><Text style={s.micro}>{trip.start.replaceAll('-', '.')} — {shortDate(trip.end)}・{days.length} 天</Text></View></View><View style={{ gap: 13, alignItems: desktop ? 'flex-end' : 'flex-start' }}><View style={s.row}><View style={[s.row, { gap: 0 }]}>{trip.members.map(m => <View key={m.id} style={{ marginLeft: -5 }}><Avatar name={m.name} color={m.color} /></View>)}</View><Text style={s.micro}>{trip.members.length} 位旅伴{trip.demo ? '・示範成員' : ''}</Text></View><View style={s.row}><Btn small title="語音" icon="headset-outline" secondary onPress={() => open('call')} /><Btn small title={shared && !shared.owner ? "旅伴" : "邀請旅伴"} icon="person-add-outline" secondary onPress={() => open('share')} /></View></View></View>
+          <View style={s.notice}><Icon name="information-circle-outline" size={17} color={C.green} /><Text style={[s.micro, { color: C.green, flex: 1 }]}>{trip.demo ? '示範旅行與示意照片・操作僅存在這個瀏覽器。' : shared ? '共用旅行・行程、美食收藏和支出會與旅伴同步。' : '本機旅行・資料存在這個瀏覽器。'}</Text></View>
           {desktop && <View style={s.desktopTabs}>{tabs.map(t => <Pressable accessibilityRole="tab" accessibilityState={{ selected: tab === t.name }} key={t.name} onPress={() => changeTab(t.name)} style={[s.desktopTab, tab === t.name && s.desktopTabActive]}><Icon name={t.icon} size={19} color={tab === t.name ? C.green : C.muted} /><Text style={[s.tabText, tab === t.name && { color: C.green }]}>{t.name}</Text>{t.name === '聊天' && <View style={s.tinyDot} />}</Pressable>)}<View style={{ flex: 1 }} /><Text style={s.micro}>一趟旅行，一起完成</Text></View>}
           <View style={[s.workspace, !wide && { flexDirection: 'column' }]}><View style={{ flex: 1, minWidth: 0 }}>
             {tab === '行程' && <>
               {sectionHead('ITINERARY', '把日子，排成喜歡的樣子', '留一點計畫，也留一點偶然。', <Btn small title="新增行程" icon="add" onPress={() => open('event')} />)}
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.dayList}>{days.map((date, i) => <Pressable accessibilityRole="button" accessibilityLabel={`第${i + 1}天 ${shortDate(date)}`} accessibilityState={{ selected: day === i }} key={date} onPress={() => setDay(i)} style={[s.day, day === i && s.dayActive]}><Text style={[s.dayOver, day === i && { color: '#D1DFC9' }]}>DAY {String(i + 1).padStart(2, '0')}</Text><Text style={[s.dayDate, day === i && { color: 'white' }]}>{shortDate(date)}</Text><Text style={[s.micro, day === i && { color: '#DFE8DC' }]}>週{weekdays[new Date(date + 'T12:00:00Z').getUTCDay()]}</Text></Pressable>)}</ScrollView>
               <View style={[s.between, { marginTop: 25, marginBottom: 20 }]}><View style={s.row}><Text style={s.cardTitle}>{shortDate(days[day])} 的小計畫</Text><Text style={s.roundCount}>{trip.events.filter(e => e.day === day).length}</Text></View><Text style={s.micro}>依時間排列</Text></View>
-              {trip.events.filter(e => e.day === day).sort((a, b) => a.time.localeCompare(b.time)).map((event, i, all) => <View style={s.timelineRow} key={event.id}><View style={s.timeColumn}><Text style={s.time}>{event.time}</Text><View style={[s.timelineDot, event.done && { backgroundColor: C.green }]} />{i < all.length - 1 && <View style={s.timelineLine} />}</View><View style={[s.eventCard, !desktop && { padding: 14 }]}><View style={{ flex: 1, gap: 9 }}><View style={s.between}><Text style={s.eventCategory}>{event.category}</Text><Pressable accessibilityRole="checkbox" accessibilityState={{ checked: event.done }} accessibilityLabel={`完成${event.title}`} onPress={() => update(t => ({ ...t, events: t.events.map(e => e.id === event.id ? { ...e, done: !e.done } : e) }))} style={s.checkButton}><Icon name={event.done ? 'checkmark-circle' : 'ellipse-outline'} color={event.done ? C.green : '#BBC3B5'} size={23} /></Pressable></View><Text style={[s.eventTitle, event.done && { color: C.muted }]}>{event.title}</Text><Text style={s.micro}>{event.note || '留一段時間給旅途的驚喜'}</Text>{event.mapQuery && <View style={{ gap: 9, marginTop: 5 }}><View style={s.row}><Icon name="location-outline" size={15} color={C.green} /><Text style={[s.micro, { flex: 1 }]}>{event.mapQuery}</Text></View><View style={[s.row, { flexWrap: 'wrap' }]}><Btn small secondary title="地圖查詢" icon="map-outline" onPress={() => launchMap(event.mapQuery!, 'search', event.googlePlaceId, event.mapUrl)} /><Btn small secondary title="路線規劃" icon="navigate-outline" onPress={() => launchMap(event.mapQuery!, 'directions', event.googlePlaceId)} /></View></View>}{event.placeId && <Pressable accessibilityRole="button" onPress={() => open('expense', trip.places.find(p => p.id === event.placeId))} style={[s.row, { marginTop: 3, minHeight: 36 }]}><Icon name="wallet-outline" size={16} color={C.green} /><Text style={[s.label, { color: C.green }]}>記下這一餐的花費</Text><Icon name="arrow-forward" size={15} color={C.green} /></Pressable>}</View>{event.image && desktop && <Photo uri={event.image} style={{ width: 108, height: 108, borderRadius: 10, marginLeft: 15 }} />}</View></View>)}
+              {trip.events.filter(e => e.day === day).sort((a, b) => a.time.localeCompare(b.time)).map((event, i, all) => <View style={s.timelineRow} key={event.id}><View style={s.timeColumn}><Text style={s.time}>{event.time}</Text><View style={[s.timelineDot, event.done && { backgroundColor: C.green }]} />{i < all.length - 1 && <View style={s.timelineLine} />}</View><View style={[s.eventCard, !desktop && { padding: 14 }]}><View style={{ flex: 1, gap: 9 }}><View style={s.between}><Text style={s.eventCategory}>{event.category}</Text><Pressable accessibilityRole="checkbox" accessibilityState={{ checked: event.done }} accessibilityLabel={`完成${event.title}`} disabled={cloudBusy} onPress={() => void update(t => ({ ...t, events: t.events.map(e => e.id === event.id ? { ...e, done: !event.done } : e) }))} style={s.checkButton}><Icon name={event.done ? 'checkmark-circle' : 'ellipse-outline'} color={event.done ? C.green : '#BBC3B5'} size={23} /></Pressable></View><Text style={[s.eventTitle, event.done && { color: C.muted }]}>{event.title}</Text><Text style={s.micro}>{event.note || '留一段時間給旅途的驚喜'}</Text>{event.mapQuery && <View style={{ gap: 9, marginTop: 5 }}><View style={s.row}><Icon name="location-outline" size={15} color={C.green} /><Text style={[s.micro, { flex: 1 }]}>{event.mapQuery}</Text></View><View style={[s.row, { flexWrap: 'wrap' }]}><Btn small secondary title="地圖查詢" icon="map-outline" onPress={() => launchMap(event.mapQuery!, 'search', event.googlePlaceId, event.mapUrl)} /><Btn small secondary title="路線規劃" icon="navigate-outline" onPress={() => launchMap(event.mapQuery!, 'directions', event.googlePlaceId)} /></View></View>}{event.placeId && <Pressable accessibilityRole="button" onPress={() => open('expense', trip.places.find(p => p.id === event.placeId))} style={[s.row, { marginTop: 3, minHeight: 36 }]}><Icon name="wallet-outline" size={16} color={C.green} /><Text style={[s.label, { color: C.green }]}>記下這一餐的花費</Text><Icon name="arrow-forward" size={15} color={C.green} /></Pressable>}</View>{event.image && desktop && <Photo uri={event.image} style={{ width: 108, height: 108, borderRadius: 10, marginLeft: 15 }} />}</View></View>)}
               {!trip.events.some(e => e.day === day) && empty('今天，還是一張空白明信片', '新增一個行程，或到美食口袋找找靈感。', 'map-outline')}
               <Pressable accessibilityRole="button" onPress={() => { changeTab('美食'); }} style={s.inlineHint}><Icon name="restaurant-outline" color={C.orange} size={19} /><Text style={[s.body, { flex: 1 }]}>午餐還沒決定？到美食口袋找點靈感。</Text><Icon name="arrow-forward" color={C.orange} size={18} /></Pressable>
             </>}
@@ -211,7 +357,7 @@ function Journal() {
               <View style={[s.row, { marginBottom: 24, flexWrap: 'wrap' }]}>{['全部', '已收藏', '已排入行程'].map(f => <Chip key={f} active={foodFilter === f} onPress={() => setFoodFilter(f)}>{f}</Chip>)}</View>
               <View style={{ gap: 20 }}>{trip.places.filter(p => foodFilter === '全部' || (foodFilter === '已收藏' ? p.saved : trip.events.some(e => e.placeId === p.id))).map(place => {
                 const scheduled = trip.events.some(e => e.placeId === place.id);
-                return <View key={place.id} style={s.foodCard}><Photo uri={place.image} style={{ height: desktop ? 220 : 190 }} /><View style={s.foodImageLabel}><Text style={s.heroTagText}>{place.source === 'manual' ? '示意照片' : place.source === 'google' ? '示意餐點照片・Google 店家' : '示意照片・虛構餐廳'}</Text></View><Pressable accessibilityRole="button" accessibilityLabel={place.saved ? `取消收藏${place.name}` : `收藏${place.name}`} onPress={() => { update(t => ({ ...t, places: t.places.map(p => p.id === place.id ? { ...p, saved: !p.saved } : p) })); notify(place.saved ? '已取消收藏' : '已放進美食口袋'); }} style={s.heartButton}><Icon name={place.saved ? 'heart' : 'heart-outline'} color={place.saved ? C.orange : C.ink} /></Pressable><View style={{ padding: 22, gap: 13 }}><View style={s.between}><Text style={s.cardTitle}>{place.name}</Text><Text style={s.eventCategory}>{place.category}</Text></View><Text style={s.micro}>{place.area}　·　{place.price}／人</Text><Text style={s.body}>{place.description}</Text><Btn small secondary title="在地圖查看店家" icon="map-outline" onPress={() => launchMap(place.name + ' ' + place.area, 'search', place.googlePlaceId, place.mapUrl)} /><View style={[s.between, { marginTop: 4, gap: 8, flexWrap: 'wrap' }]}><Text style={s.micro}>{place.saved ? '♥ 已收藏到這趟旅行' : '旅伴的美食靈感'}</Text><Btn small title={scheduled ? '查看行程' : '加入行程'} icon={scheduled ? 'checkmark' : 'add'} onPress={() => { if (scheduled) { const e = trip.events.find(e => e.placeId === place.id)!; setDay(e.day); changeTab('行程'); } else open('place', place); }} /></View></View></View>;
+                return <View key={place.id} style={s.foodCard}><Photo uri={place.image} style={{ height: desktop ? 220 : 190 }} /><View style={s.foodImageLabel}><Text style={s.heroTagText}>{place.source === 'manual' ? '示意照片' : place.source === 'google' ? '示意餐點照片・Google 店家' : '示意照片・虛構餐廳'}</Text></View><Pressable accessibilityRole="button" accessibilityLabel={place.saved ? `取消收藏${place.name}` : `收藏${place.name}`} disabled={cloudBusy} onPress={async () => { if (await update(t => ({ ...t, places: t.places.map(p => p.id === place.id ? { ...p, saved: !place.saved } : p) }))) notify(place.saved ? '已取消收藏' : '已放進美食口袋'); }} style={s.heartButton}><Icon name={place.saved ? 'heart' : 'heart-outline'} color={place.saved ? C.orange : C.ink} /></Pressable><View style={{ padding: 22, gap: 13 }}><View style={s.between}><Text style={s.cardTitle}>{place.name}</Text><Text style={s.eventCategory}>{place.category}</Text></View><Text style={s.micro}>{place.area}　·　{place.price}／人</Text><Text style={s.body}>{place.description}</Text><Btn small secondary title="在地圖查看店家" icon="map-outline" onPress={() => launchMap(place.name + ' ' + place.area, 'search', place.googlePlaceId, place.mapUrl)} /><View style={[s.between, { marginTop: 4, gap: 8, flexWrap: 'wrap' }]}><Text style={s.micro}>{place.saved ? '♥ 已收藏到這趟旅行' : '旅伴的美食靈感'}</Text><Btn small title={scheduled ? '查看行程' : '加入行程'} icon={scheduled ? 'checkmark' : 'add'} onPress={() => { if (scheduled) { const e = trip.events.find(e => e.placeId === place.id)!; setDay(e.day); changeTab('行程'); } else open('place', place); }} /></View></View></View>;
               })}</View>
               {!trip.places.some(p => foodFilter === '全部' || (foodFilter === '已收藏' ? p.saved : trip.events.some(e => e.placeId === p.id))) && empty('口袋裡還有位置', trip.demo ? '切換「全部」，收藏一間想吃的店吧。' : '點「搜尋美食」收藏想去的店家。', 'restaurant-outline')}
             </>}
@@ -230,11 +376,11 @@ function Journal() {
               <View style={s.photoGrid}>{photos.map((p, i) => <Pressable accessibilityRole="button" accessibilityLabel={`查看照片：${p.caption}`} onPress={() => setPhotoIndex(i)} key={i} style={[s.photoTile, { width: desktop ? '48%' : '47%' }]}><Photo uri={p.uri} style={{ width: '100%', aspectRatio: i % 3 === 0 ? .9 : 1 }} /><View style={{ padding: 13, gap: 6 }}><Text style={s.label}>{p.caption}</Text><Text style={s.micro}>{p.by}・{p.day}・示意</Text></View></Pressable>)}</View>
               {!photos.length && empty('旅途的第一張照片，會是什麼？', '正式版本將支援成員共同上傳、留言與相簿權限。', 'images-outline')}
             </>}
-            {tab === '聊天' && <>
+            {tab === '聊天' && (shared ? empty('共用聊天尚未開放', '可先與旅伴一起編排行程和記帳。', 'chatbubbles-outline') : <>
               {sectionHead('TRAVEL CHAT', '說走就走，也說說今天', '本機模擬聊天室・沒有傳送訊息或連線中的旅伴', <Btn small title="語音通話" icon="headset-outline" onPress={() => open('call')} />)}
               <View style={s.chatPanel}><View style={s.chatDate}><Text style={s.micro}>這趟旅行的聊天紀錄・示範</Text></View>{trip.messages.map(m => { const person = trip.members.find(p => p.id === m.sender)!; const mine = m.sender === 'me'; return <View key={m.id} style={[s.chatRow, mine && { flexDirection: 'row-reverse' }]}><Avatar name={person.name} color={person.color} /><View style={{ maxWidth: '80%', gap: 7, alignItems: mine ? 'flex-end' : 'flex-start' }}><Text style={s.micro}>{person.name}</Text><View style={[s.bubble, mine && s.myBubble]}><Text style={[s.chatText, mine && { color: 'white' }]}>{m.text}</Text></View><Text style={s.chatTime}>{m.time}{mine ? '・僅本機' : '・示範訊息'}</Text></View></View>; })}{!trip.messages.length && empty('打個招呼，開始期待旅行', '此處僅保存本機訊息，尚未啟用多人聊天。', 'chatbubbles-outline')}</View>
               <View style={s.composer}><TextInput accessibilityLabel="輸入旅行訊息" value={message} onChangeText={setMessage} placeholder="想和旅伴說些什麼？" placeholderTextColor={C.muted} style={s.composerInput} maxLength={1000} multiline /><Pressable accessibilityRole="button" accessibilityLabel="傳送本機模擬訊息" disabled={!message.trim()} onPress={sendMessage} style={[s.sendButton, !message.trim() && { opacity: .4 }]}><Icon name="arrow-up" color="white" /></Pressable></View>
-            </>}
+            </>)}
           </View>
           {wide && <View style={s.aside}><View style={s.asideCard}><Text style={s.eyebrow}>OUR TRAVEL NOTE</Text><Photo uri={trip.image} style={{ height: 165, borderRadius: 10, marginTop: 18, marginBottom: 18 }} /><Text style={s.asideTitle}>最好的風景，{ '\n' }是我們都在這裡。</Text><Text style={[s.body, { marginTop: 12 }]}>行程可以慢慢排，回憶可以一起存。這是屬於 {trip.members.length} 個人的旅行小宇宙。</Text><View style={s.cardDivider} /><View style={[s.between, { marginTop: 16 }]}><Text style={s.micro}>行程完成</Text><Text style={s.label}>{trip.events.filter(e => e.done).length} / {trip.events.length}</Text></View><View style={s.progress}><View style={{ height: 5, width: `${trip.events.length ? trip.events.filter(e => e.done).length / trip.events.length * 100 : 0}%`, backgroundColor: '#73956C', borderRadius: 3 }} /></View></View><View style={s.flowCard}><Icon name="sparkles-outline" color={C.orange} /><Text style={s.cardTitle}>試試一起規劃的感覺</Text><Text style={s.body}>① 收藏一間想吃的店{ '\n' }② 把它加入今天的行程{ '\n' }③ 記下餐費，讓大家分攤{ '\n' }④ 去相簿看看旅行的樣子</Text><Pressable accessibilityRole="button" onPress={() => changeTab('美食')} style={[s.row, { minHeight: 44 }]}><Text style={[s.label, { color: C.orange }]}>從美食口袋開始</Text><Icon name="arrow-forward" size={16} color={C.orange} /></Pressable></View><Text style={[s.micro, { textAlign: 'center', lineHeight: 20 }]}>原型 v0.1・本機資料{ '\n' }還沒有任何雲端服務連線</Text></View>}
           </View>
@@ -244,9 +390,8 @@ function Journal() {
     </View>
   </View>
   {!!toast && <Pressable accessibilityRole="alert" onPress={() => setToast('')} style={[s.toast, { bottom: !desktop && trip ? 100 : 26 }]}><Icon name="checkmark-circle" color="#D6E4CB" size={20} /><Text style={s.toastText}>{toast}</Text></Pressable>}
-  <Modal visible={sheet !== null} transparent animationType="fade" onRequestClose={() => setSheet(null)}><KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={s.modalOverlay}><Pressable accessibilityLabel="關閉對話框" onPress={() => setSheet(null)} style={StyleSheet.absoluteFill} /><View style={[s.modal, !desktop && { maxHeight: '92%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, marginBottom: 0 }]}><View style={s.modalHeader}><Text style={s.modalTitle}>{{ create: '開始一趟新旅行', event: '寫下一個小計畫', expense: '記下這筆共同支出', place: '把美食排進旅行', settle: error === 'detail' ? '這筆支出怎麼分' : '旅伴之間的結算', share: '分享這趟旅行', call: '旅伴語音通話', help: '關於這本旅伴手帳', foodSearch: '尋找美食' }[sheet || 'help']}</Text><Pressable accessibilityRole="button" accessibilityLabel="關閉" onPress={() => setSheet(null)} style={s.iconButton}><Icon name="close" /></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.modalBody}>
-    <View style={s.modalNotice}><Icon name="flask-outline" size={17} color={C.green} /><Text style={[s.micro, { color: C.green, flex: 1 }]}>可操作原型・本機體驗，尚未串接雲端</Text></View>
-    {sheet === 'foodSearch' && <MapPlaceSearch kind="food" destination={trip?.destination ?? ''} onInvalidLink={setPlaceLinkInvalid} onSelect={setChosenLocation} />}{sheet === 'create' && <><Text style={s.body}>給這段共同的回憶，取個喜歡的名字。</Text><Field label="旅行名稱" value={title} onChangeText={setTitle} placeholder="例如：和家人的台南週末" /><Field label="目的地" value={destination} onChangeText={setDestination} placeholder="例如：台灣・台南" /><Field label="出發日期（YYYY-MM-DD）" value={start} onChangeText={setStart} /><Field label="結束日期（YYYY-MM-DD）" value={end} onChangeText={setEnd} /><Text style={s.micro}>最多 31 天。建立後由自己一位成員開始；邀請功能尚待串接。</Text></>}
+  <Modal visible={sheet !== null} transparent animationType="fade" onRequestClose={closeSheet}><KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={s.modalOverlay}><Pressable accessibilityLabel="關閉對話框" onPress={closeSheet} style={StyleSheet.absoluteFill} /><View style={[s.modal, !desktop && { maxHeight: '92%', borderBottomLeftRadius: 0, borderBottomRightRadius: 0, marginBottom: 0 }]}><View style={s.modalHeader}><Text style={s.modalTitle}>{{ create: '開始一趟新旅行', event: '寫下一個小計畫', expense: '記下這筆共同支出', place: '把美食排進旅行', settle: error === 'detail' ? '這筆支出怎麼分' : '旅伴之間的結算', share: '這趟旅行的旅伴', join: '加入共用旅行', call: '旅伴語音通話', help: '關於這本旅伴手帳', foodSearch: '尋找美食' }[sheet || 'help']}</Text><Pressable accessibilityRole="button" accessibilityLabel="關閉" onPress={closeSheet} style={s.iconButton}><Icon name="close" /></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.modalBody}>
+    {sheet === 'foodSearch' && <MapPlaceSearch kind="food" destination={trip?.destination ?? ''} onInvalidLink={setPlaceLinkInvalid} onSelect={setChosenLocation} />}{sheet === 'create' && <><Text style={s.body}>給這段共同的回憶，取個喜歡的名字。</Text><Field label="旅行名稱" value={title} onChangeText={setTitle} placeholder="例如：和家人的台南週末" /><Field label="目的地" value={destination} onChangeText={setDestination} placeholder="例如：台灣・台南" /><Field label="出發日期（YYYY-MM-DD）" value={start} onChangeText={setStart} /><Field label="結束日期（YYYY-MM-DD）" value={end} onChangeText={setEnd} /><Text style={s.micro}>最多 31 天。</Text></>}
     {(sheet === 'event' || sheet === 'place' || sheet === 'expense') && <>
       {sheet === 'event' && <MapPlaceSearch destination={trip?.destination ?? ''} onInvalidLink={setPlaceLinkInvalid} onSelect={chooseEventLocation} />}
       {sheet === 'place' && selectedPlace ? <View style={s.row}><Photo uri={selectedPlace.image} style={{ width: 75, height: 75, borderRadius: 10 }} /><View style={{ gap: 8, flex: 1 }}><Text style={s.cardTitle}>{selectedPlace.name}</Text><Text style={s.micro}>加入行程時也會一起收藏</Text></View></View> : <Field label={sheet === 'expense' ? '支出名稱' : '行程名稱'} value={title} onChangeText={setTitle} placeholder={sheet === 'expense' ? '例如：大家一起吃拉麵' : '想一起去的地方'} />}
@@ -258,11 +403,37 @@ function Journal() {
       {sheet === 'expense' && <><Field label="金額（日圓 JPY，整數）" value={amount} onChangeText={setAmount} placeholder="例如：4801" numeric /><Text style={s.label}>誰先付？</Text><View style={[s.row, { flexWrap: 'wrap' }]}>{trip?.members.map(m => <Chip key={m.id} active={payer === m.id} onPress={() => setPayer(m.id)}>{m.name}</Chip>)}</View><Text style={s.label}>哪些人一起分攤？</Text><View style={[s.row, { flexWrap: 'wrap' }]}>{trip?.members.map(m => <Chip key={m.id} active={participants.includes(m.id)} onPress={() => setParticipants(prev => prev.includes(m.id) ? prev.filter(id => id !== m.id) : [...prev, m.id])}>{participants.includes(m.id) ? '✓ ' : ''}{m.name}</Chip>)}</View>{/^\d+$/.test(amount) && Number(amount) > 0 && Number(amount) <= 99999999 && participants.length > 0 && <View style={s.splitPreview}><Text style={s.label}>均分預覽</Text>{Object.entries(splitAmount(Number(amount), participants)).map(([id, a]) => <View style={s.between} key={id}><Text style={s.body}>{memberName(id)}</Text><Text style={s.label}>{money(a)}</Text></View>)}<Text style={s.micro}>尾數固定分配，分攤總額 {money(Number(amount))}。</Text></View>}</>}
     </>}
     {sheet === 'settle' && trip && (error === 'detail' ? <Text style={[s.body, { lineHeight: 29 }]}>{note}</Text> : <><Text style={s.body}>以下依目前所有支出計算，僅供確認帳目。沒有轉帳，也未標記任何款項已付款。</Text>{settlements(trip).map((t, i) => <View key={i} style={s.settlementRow}><Text style={[s.label, { flex: 1 }]}>{memberName(t.from)} → {memberName(t.to)}</Text><Text style={s.expenseAmount}>{money(t.amount)}</Text></View>)}{!settlements(trip).length && empty('目前帳目已平衡', '大家不需要互相補款。', 'checkmark-circle-outline')}<Text style={s.micro}>結算會隨新增支出自動更新，實際付款與核銷尚待開發。</Text></>)}
-    {sheet === 'share' && <><Text style={s.body}>選擇未來希望分享的範圍。此處只預覽設定，不會建立連結，也不會將資料公開。</Text>{['僅限旅伴', '受邀者可檢視', '僅分享行程摘要'].map(scope => <Pressable key={scope} accessibilityRole="radio" accessibilityState={{ checked: shareScope === scope }} onPress={() => setShareScope(scope)} style={s.settlementRow}><Icon name={shareScope === scope ? 'radio-button-on' : 'radio-button-off'} color={C.green} /><Text style={s.label}>{scope}</Text></Pressable>)}<View style={s.notice}><Icon name="lock-closed-outline" size={18} color={C.green} /><Text style={[s.body, { flex: 1 }]}>分享預覽：{shareScope}。正式版本須登入與檢查權限，並提供到期及撤銷設定。</Text></View></>}
+    {sheet === 'share' && trip && <>
+      {trip.members.map(member => <View key={member.id} style={s.row}><Avatar name={member.name} color={member.color} /><Text style={s.label}>{member.name.replace('（我）', '')}{member.id === memberId ? '（你）' : ''}</Text></View>)}
+      {trip.demo ? <Text style={s.body}>先建立自己的旅行，就能在該旅行邀請旅伴。</Text> : !sharingAvailable ? <Text style={s.body}>這個版本的共用服務尚未連接。</Text> : (!shared || shared.owner) && <>
+        {!shared && <>
+          <Text style={s.body}>產生邀請後，加入的旅伴可以查看和修改行程與美食收藏，並查看及新增支出。這包括目前已有的行程、收藏和支出。</Text>
+          <Field label="你在這趟旅行的名字" value={memberDisplayName} onChangeText={setMemberDisplayName} placeholder="例如：小安" />
+        </>}
+        <Text style={s.micro}>每個連結限一人使用，24 小時後到期。產生新連結會讓先前未使用的連結失效。</Text>
+        <Btn title="產生邀請連結" icon="link-outline" onPress={inviteFriend} disabled={cloudBusy || (!shared && (!memberDisplayName.trim() || memberDisplayName.trim().length > 40))} />
+        {inviteUrl && <>
+          <Text selectable style={s.body}>{inviteUrl}</Text>
+          <Btn title="複製邀請連結" secondary onPress={async () => {
+            try { await window.navigator.clipboard.writeText(inviteUrl); setError('已複製邀請連結。'); }
+            catch { setError('請長按連結手動複製。'); }
+          }} />
+        </>}
+        {shared?.owner && <Btn title="撤回未使用的邀請" secondary disabled={cloudBusy} onPress={() => void runCloud(async () => { await revokeInvite(shared.trip.id); setInviteUrl(''); setError('已撤回未使用的邀請。'); })} />}
+      </>}
+    </>}
+    {sheet === 'join' && <>
+      {!sharingAvailable ? <Text style={s.body}>這個版本的共用服務尚未連接。</Text> : joinPreview ? <>
+        <Text style={s.cardTitle}>{joinPreview.title}</Text>
+        <Text style={s.body}>{joinPreview.destination}</Text>
+        <Field label="你在這趟旅行的名字" value={memberDisplayName} onChangeText={setMemberDisplayName} placeholder="例如：小宇" />
+        <Btn title="接受邀請" icon="person-add-outline" onPress={joinTrip} disabled={cloudBusy || !memberDisplayName.trim() || memberDisplayName.trim().length > 40} />
+      </> : !error && <View style={s.row}><ActivityIndicator color={C.green} /><Text style={s.body}>正在讀取邀請…</Text></View>}
+    </>}
     {sheet === 'call' && <><View style={s.callCircle}><Icon name="headset-outline" color={C.green} size={48} /></View><Text style={[s.cardTitle, { textAlign: 'center' }]}>通話介面預覽</Text><Text style={[s.body, { textAlign: 'center' }]}>尚未連接 LiveKit，沒有使用麥克風，也沒有撥打給旅伴。</Text><View style={[s.row, { justifyContent: 'center', flexWrap: 'wrap' }]}>{trip?.members.map(m => <View key={m.id} style={{ alignItems: 'center', gap: 8 }}><Avatar name={m.name} color={m.color} size={50} /><Text style={s.micro}>{m.name}</Text><Text style={s.micro}>未連線</Text></View>)}</View><Btn title={muted ? '解除靜音（模擬）' : '靜音（模擬）'} icon={muted ? 'mic-off-outline' : 'mic-outline'} secondary onPress={() => setMuted(v => !v)} /><Btn title="結束介面預覽" icon="call-outline" onPress={() => setSheet(null)} /></>}
-    {sheet === 'help' && <><Text style={s.cardTitle}>一趟旅行，一個共同空間。</Text><Text style={s.body}>「旅伴手帳」可操作原型 v0.1。旅行、行程、收藏、分帳與文字訊息保存在本機，沒有登入或連接任何遠端帳號。照片為 Unsplash 示意素材，餐廳與旅伴均為虛構。</Text><Text style={s.label}>體驗一趟完整的小旅行</Text><Text style={s.body}>開啟「京都慢慢走」→ 美食 → 收藏小麵屋 → 加入行程 → 點「記下這一餐的花費」→ 新增支出、選擇付款與分攤成員 → 查看結算 → 相簿點選照片。</Text><Text style={s.label}>後續開發清單</Text>{['帳號：Supabase Auth、登入復原、登出及刪除帳號。', '成員權限：擁有者、編輯者、檢視者；邀請到期、撤銷及 RLS。', '雲端儲存：Postgres 資料結構、照片私有儲存、縮圖、備份與刪除。', '共同編輯：版本號、衝突提示、樂觀更新、離線佇列與重試。', '記帳：各幣別最小單位、尾數規則、自訂分攤、匯率及核銷。', '分享：行程／照片／帳目獨立範圍，預設私人與可撤銷連結。', '即時語音：LiveKit token 服務、麥克風權限、斷線重連、背景音訊。', '雙平台：iOS／Android 真機、安全區域、鍵盤、大字體及弱網測試。'].map(t => <Text key={t} style={s.body}>• {t}</Text>)}<Text style={s.micro}>完整驗收條件與開發順序請見專案 docs/ROADMAP.md。</Text></>}
+    {sheet === 'help' && <><Text style={s.cardTitle}>一趟旅行，一個共同空間。</Text><Text style={s.body}>{sharingAvailable ? '本機旅行保存在目前瀏覽器。共用旅行的行程、收藏與支出會同步給已接受邀請的旅伴。' : '旅行、行程、收藏、記帳與體驗訊息保存在目前瀏覽器。'}</Text><Text style={s.label}>體驗一趟完整的小旅行</Text><Text style={s.body}>開啟「京都慢慢走」→ 美食 → 收藏小麵屋 → 加入行程 → 點「記下這一餐的花費」→ 新增支出、選擇付款與分攤成員 → 查看結算 → 相簿點選照片。</Text><Text style={s.label}>後續開發清單</Text>{['帳號：Supabase Auth、登入復原、登出及刪除帳號。', '成員權限：擁有者、編輯者、檢視者；邀請到期、撤銷及 RLS。', '雲端儲存：Postgres 資料結構、照片私有儲存、縮圖、備份與刪除。', '共同編輯：版本號、衝突提示、樂觀更新、離線佇列與重試。', '記帳：各幣別最小單位、尾數規則、自訂分攤、匯率及核銷。', '分享：行程／照片／帳目獨立範圍，預設私人與可撤銷連結。', '即時語音：LiveKit token 服務、麥克風權限、斷線重連、背景音訊。', '雙平台：iOS／Android 真機、安全區域、鍵盤、大字體及弱網測試。'].map(t => <Text key={t} style={s.body}>• {t}</Text>)}<Text style={s.micro}>完整驗收條件與開發順序請見專案 docs/ROADMAP.md。</Text></>}
     {!!error && error !== 'detail' && <Text accessibilityRole="alert" style={s.formError}>{error}</Text>}
-  </ScrollView>{['create', 'event', 'expense', 'place', 'foodSearch'].includes(sheet ?? '') && <View style={s.modalActions}><Btn title={sheet === 'foodSearch' ? '收藏這間店到旅行' : sheet === 'create' ? '建立我的旅行' : sheet === 'expense' ? '儲存支出與分攤' : '加入旅行行程'} icon={sheet === 'expense' ? 'checkmark' : 'add'} disabled={(sheet === 'foodSearch' && (!chosenLocation?.name || placeLinkInvalid)) || (sheet === 'event' && placeLinkInvalid)} onPress={submit} /></View>}</View></KeyboardAvoidingView></Modal>
+  </ScrollView>{['create', 'event', 'expense', 'place', 'foodSearch'].includes(sheet ?? '') && <View style={s.modalActions}><Btn title={sheet === 'foodSearch' ? '收藏這間店到旅行' : sheet === 'create' ? '建立我的旅行' : sheet === 'expense' ? '儲存支出與分攤' : '加入旅行行程'} icon={sheet === 'expense' ? 'checkmark' : 'add'} disabled={cloudBusy || (sheet === 'foodSearch' && (!chosenLocation?.name || placeLinkInvalid)) || (sheet === 'event' && placeLinkInvalid)} onPress={submit} /></View>}</View></KeyboardAvoidingView></Modal>
   <Modal visible={photoIndex !== null} transparent animationType="fade" onRequestClose={() => setPhotoIndex(null)}><SafeAreaView style={s.lightbox}><View style={[s.between, { padding: 20 }]}><Text style={{ color: 'white', fontSize: 16 }}>共同相簿・示意照片</Text><Pressable accessibilityRole="button" accessibilityLabel="關閉照片" onPress={() => setPhotoIndex(null)} style={s.iconButton}><Icon name="close" color="white" size={28} /></Pressable></View>{photoIndex !== null && photos[photoIndex] && <><Image source={{ uri: photos[photoIndex].uri }} resizeMode="contain" style={{ flex: 1, width: '100%' }} /><Text style={s.lightboxCaption}>{photos[photoIndex].caption}</Text><View style={[s.row, { padding: 25, justifyContent: 'center' }]}><Btn secondary title="上一張" disabled={photoIndex === 0} onPress={() => setPhotoIndex(i => Math.max(0, (i ?? 0) - 1))} /><Text style={{ color: 'white', padding: 10 }}>{photoIndex + 1} / {photos.length}</Text><Btn secondary title="下一張" disabled={photoIndex === photos.length - 1} onPress={() => setPhotoIndex(i => Math.min(photos.length - 1, (i ?? 0) + 1))} /></View></>}</SafeAreaView></Modal>
   </SafeAreaView>;
 }
@@ -278,6 +449,6 @@ const s = StyleSheet.create({
   walletSummary: { backgroundColor: C.green, borderRadius: 15, padding: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, walletLabel: { fontSize: 12, color: '#D7E2CD', lineHeight: 22 }, walletAmount: { fontSize: 37, color: '#FFFFF3', fontWeight: '600', marginVertical: 13, letterSpacing: 1 }, balanceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 }, balanceCard: { flex: 1, minWidth: 120, borderWidth: 1, borderColor: C.line, backgroundColor: '#FEFEF9', padding: 16, borderRadius: 11, gap: 9 }, balanceNumber: { fontSize: 21, fontWeight: '600', marginTop: 6 }, expenseRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 19, borderBottomWidth: 1, borderColor: C.line }, expenseIcon: { width: 40, height: 43, backgroundColor: '#E9EEE1', borderRadius: 10, justifyContent: 'center', alignItems: 'center' }, expenseAmount: { fontSize: 17, color: C.ink, fontWeight: '600' }, photoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 15, justifyContent: 'space-between' }, photoTile: { borderWidth: 1, borderColor: C.line, borderRadius: 10, overflow: 'hidden', backgroundColor: '#FEFEF8' },
   chatPanel: { minHeight: 300, backgroundColor: '#F0F2E9', borderWidth: 1, borderColor: C.line, padding: 19, borderRadius: 12 }, chatDate: { alignItems: 'center', marginVertical: 10, marginBottom: 25 }, chatRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 24 }, bubble: { backgroundColor: '#FEFEFA', padding: 14, borderRadius: 13, borderTopLeftRadius: 3 }, myBubble: { backgroundColor: C.green, borderTopRightRadius: 3, borderTopLeftRadius: 13 }, chatText: { fontSize: 14, color: C.ink, lineHeight: 23 }, chatTime: { fontSize: 9, color: C.muted }, composer: { flexDirection: 'row', borderWidth: 1, borderColor: C.line, backgroundColor: '#FEFEFA', padding: 9, borderRadius: 11, marginTop: 16, alignItems: 'flex-end', gap: 10 }, composerInput: { flex: 1, fontSize: 14, padding: 10, color: C.ink, maxHeight: 100, minHeight: 44 }, sendButton: { width: 44, height: 44, backgroundColor: C.green, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   bottomNav: { backgroundColor: '#FCFCF8', borderTopWidth: 1, borderColor: C.line }, bottomNavRow: { flexDirection: 'row' }, bottomTab: { flex: 1, minHeight: 70, alignItems: 'center', justifyContent: 'center', gap: 5 }, bottomTabLabel: { fontSize: 11, color: C.muted }, bottomIndicator: { position: 'absolute', top: 0, width: 26, height: 3, borderRadius: 3, backgroundColor: C.green }, toast: { position: 'absolute', alignSelf: 'center', maxWidth: '90%', padding: 15, borderRadius: 12, backgroundColor: '#294738', flexDirection: 'row', gap: 10, alignItems: 'center', zIndex: 10, elevation: 10 }, toastText: { color: 'white', fontSize: 12, flexShrink: 1, lineHeight: 20 }, storageError: { padding: 10, color: '#9D5039', backgroundColor: '#FAE8DA', fontSize: 12 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(18,34,25,.46)', alignItems: 'center', justifyContent: 'flex-end' }, modal: { width: '100%', maxWidth: 550, maxHeight: '88%', backgroundColor: '#FCFCF7', borderRadius: 18, marginBottom: 30, overflow: 'hidden' }, modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingBottom: 12, borderBottomWidth: 1, borderColor: C.line }, modalTitle: { color: C.ink, fontSize: 20, fontWeight: '600', flex: 1 }, modalBody: { padding: 24, gap: 20, paddingBottom: 30 }, modalNotice: { flexDirection: 'row', gap: 8, alignItems: 'center', backgroundColor: C.soft, padding: 11, borderRadius: 7 }, modalActions: { padding: 20, borderTopWidth: 1, borderColor: C.line, paddingBottom: 28 }, input: { minHeight: 49, borderWidth: 1, borderColor: '#D8DFCF', borderRadius: 8, backgroundColor: '#FFFFFC', padding: 13, color: C.ink, fontSize: 15 }, formError: { color: '#A14F36', fontSize: 13, lineHeight: 22, backgroundColor: '#F9E8DC', padding: 12, borderRadius: 8 }, splitPreview: { backgroundColor: C.soft, padding: 17, borderRadius: 10, gap: 11 }, settlementRow: { flexDirection: 'row', gap: 12, justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: C.line, padding: 16, borderRadius: 9, minHeight: 55 }, callCircle: { width: 100, height: 100, borderRadius: 50, backgroundColor: C.soft, alignSelf: 'center', alignItems: 'center', justifyContent: 'center', marginVertical: 10 }, lightbox: { flex: 1, backgroundColor: '#15271F' }, lightboxCaption: { color: 'white', textAlign: 'center', padding: 20, fontSize: 17 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(18,34,25,.46)', alignItems: 'center', justifyContent: 'flex-end' }, modal: { width: '100%', maxWidth: 550, maxHeight: '88%', backgroundColor: '#FCFCF7', borderRadius: 18, marginBottom: 30, overflow: 'hidden' }, modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingBottom: 12, borderBottomWidth: 1, borderColor: C.line }, modalTitle: { color: C.ink, fontSize: 20, fontWeight: '600', flex: 1 }, modalBody: { padding: 24, gap: 20, paddingBottom: 30 }, modalActions: { padding: 20, borderTopWidth: 1, borderColor: C.line, paddingBottom: 28 }, input: { minHeight: 49, borderWidth: 1, borderColor: '#D8DFCF', borderRadius: 8, backgroundColor: '#FFFFFC', padding: 13, color: C.ink, fontSize: 15 }, formError: { color: '#A14F36', fontSize: 13, lineHeight: 22, backgroundColor: '#F9E8DC', padding: 12, borderRadius: 8 }, splitPreview: { backgroundColor: C.soft, padding: 17, borderRadius: 10, gap: 11 }, settlementRow: { flexDirection: 'row', gap: 12, justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: C.line, padding: 16, borderRadius: 9, minHeight: 55 }, callCircle: { width: 100, height: 100, borderRadius: 50, backgroundColor: C.soft, alignSelf: 'center', alignItems: 'center', justifyContent: 'center', marginVertical: 10 }, lightbox: { flex: 1, backgroundColor: '#15271F' }, lightboxCaption: { color: 'white', textAlign: 'center', padding: 20, fontSize: 17 },
 });
 
